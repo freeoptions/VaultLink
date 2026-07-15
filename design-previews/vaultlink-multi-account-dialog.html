@@ -1,0 +1,1472 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VaultLink 多账号模式预览</title>
+    <style>
+      :root {
+        --bg: #eef2f0;
+        --paper: #fbfcfb;
+        --surface: #ffffff;
+        --surface-2: #f4f7f7;
+        --ink: #10202d;
+        --muted: #667684;
+        --line: #dce5e3;
+        --line-strong: #c6d4d1;
+        --primary: #0f766e;
+        --primary-2: #134e4a;
+        --primary-tint: #e3f4f1;
+        --amber: #c47b2d;
+        --amber-tint: #fff2db;
+        --rose: #b6424f;
+        --rose-tint: #ffe7ea;
+        --blue: #486f9f;
+        --blue-tint: #e9f1fb;
+        --green: #2f855a;
+        --shadow: 0 26px 70px rgba(18, 36, 50, 0.14);
+        --soft-shadow: 0 14px 36px rgba(18, 36, 50, 0.1);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+      }
+
+      body {
+        background: #dfe8e6;
+        color: var(--ink);
+        font-family:
+          "Microsoft YaHei",
+          "PingFang SC",
+          "Segoe UI",
+          Arial,
+          sans-serif;
+        letter-spacing: 0;
+      }
+
+      .preview-shell {
+        width: 1440px;
+        min-height: 960px;
+        padding: 28px;
+        background:
+          radial-gradient(circle at 10% 0%, rgba(15, 118, 110, 0.12), transparent 26%),
+          radial-gradient(circle at 92% 12%, rgba(196, 123, 45, 0.12), transparent 24%),
+          linear-gradient(180deg, #edf3f1 0%, #e6eeee 100%);
+      }
+
+      .view {
+        display: none;
+      }
+
+      body[data-view="overview"] #overview,
+      body[data-view="dialog"] #dialog,
+      body[data-view="detail"] #detail {
+        display: block;
+      }
+
+      .window {
+        height: 904px;
+        overflow: hidden;
+        border: 1px solid rgba(198, 212, 209, 0.9);
+        border-radius: 8px;
+        background: var(--paper);
+        box-shadow: var(--shadow);
+      }
+
+      .window-topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        height: 82px;
+        padding: 0 28px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(251, 252, 251, 0.94);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        gap: 13px;
+      }
+
+      .logo {
+        display: grid;
+        width: 42px;
+        height: 42px;
+        flex: 0 0 auto;
+        place-items: center;
+        border-radius: 8px;
+        background: linear-gradient(135deg, #10202d, #0f766e);
+        color: #fff;
+        font-size: 20px;
+        font-weight: 800;
+      }
+
+      .brand-title {
+        margin: 0;
+        font-size: 24px;
+        font-weight: 800;
+        line-height: 1;
+      }
+
+      .brand-subtitle {
+        margin: 7px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .top-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        height: 38px;
+        padding: 0 15px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: #263844;
+        font-size: 14px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .btn.primary {
+        border-color: var(--primary);
+        background: var(--primary);
+        color: #fff;
+        box-shadow: 0 12px 22px rgba(15, 118, 110, 0.2);
+      }
+
+      .btn.tint {
+        border-color: #b7dcd6;
+        background: var(--primary-tint);
+        color: var(--primary-2);
+      }
+
+      .icon {
+        display: inline-grid;
+        width: 19px;
+        height: 19px;
+        place-items: center;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: 900;
+        line-height: 1;
+      }
+
+      .main-pad {
+        padding: 22px 26px 26px;
+      }
+
+      .toolbar {
+        display: grid;
+        grid-template-columns: minmax(420px, 1fr) auto;
+        gap: 14px;
+        margin-bottom: 18px;
+      }
+
+      .search-box,
+      .filter-box {
+        display: flex;
+        align-items: center;
+        min-height: 54px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: 0 10px 26px rgba(16, 32, 45, 0.05);
+      }
+
+      .search-box {
+        padding: 0 16px;
+        gap: 11px;
+        color: var(--muted);
+        font-size: 15px;
+      }
+
+      .filter-box {
+        justify-content: flex-end;
+        padding: 0 10px;
+        gap: 8px;
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 34px;
+        padding: 0 12px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: #fff;
+        color: #546573;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .chip.active {
+        border-color: var(--primary);
+        background: var(--primary);
+        color: #fff;
+      }
+
+      .card-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+      }
+
+      .account-card {
+        min-height: 690px;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: var(--soft-shadow);
+      }
+
+      .account-card.featured {
+        border-color: rgba(15, 118, 110, 0.32);
+      }
+
+      .card-head {
+        padding: 18px 18px 14px;
+        border-bottom: 1px solid var(--line);
+        background:
+          linear-gradient(180deg, rgba(227, 244, 241, 0.78), rgba(255, 255, 255, 0.96));
+      }
+
+      .card-title-row,
+      .field-top,
+      .detail-title-row,
+      .list-row-main {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-width: 0;
+        gap: 12px;
+      }
+
+      .app-avatar {
+        display: grid;
+        width: 42px;
+        height: 42px;
+        flex: 0 0 auto;
+        place-items: center;
+        border-radius: 8px;
+        background: #10202d;
+        color: white;
+        font-weight: 900;
+      }
+
+      .app-avatar.blue {
+        background: var(--blue);
+      }
+
+      .app-avatar.amber {
+        background: var(--amber);
+      }
+
+      .app-avatar.green {
+        background: var(--green);
+      }
+
+      .title-pack {
+        min-width: 0;
+        flex: 1;
+      }
+
+      .title-pack h2,
+      .title-pack h3 {
+        margin: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .title-pack h2 {
+        font-size: 20px;
+      }
+
+      .title-pack h3 {
+        font-size: 18px;
+      }
+
+      .title-pack p {
+        margin: 5px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .mini-actions {
+        display: flex;
+        gap: 6px;
+      }
+
+      .icon-btn {
+        display: grid;
+        width: 32px;
+        height: 32px;
+        place-items: center;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: transparent;
+        color: #64717b;
+        font-size: 14px;
+        font-weight: 900;
+      }
+
+      .icon-btn.soft {
+        border-color: var(--line);
+        background: #fff;
+      }
+
+      .tabs {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 16px;
+        overflow: hidden;
+      }
+
+      .tab {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        height: 34px;
+        max-width: 118px;
+        padding: 0 12px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.86);
+        color: #546573;
+        font-size: 13px;
+        font-weight: 800;
+        white-space: nowrap;
+      }
+
+      .tab.active {
+        border-color: #10202d;
+        background: #10202d;
+        color: #fff;
+      }
+
+      .tab.add {
+        border-style: dashed;
+        color: var(--primary);
+      }
+
+      .tag-row {
+        display: flex;
+        gap: 7px;
+        margin-top: 14px;
+      }
+
+      .tag {
+        height: 24px;
+        padding: 0 8px;
+        border-radius: 999px;
+        color: #fff;
+        font-size: 12px;
+        font-weight: 800;
+        line-height: 24px;
+      }
+
+      .tag.work {
+        background: var(--blue);
+      }
+
+      .tag.life {
+        background: var(--amber);
+      }
+
+      .tag.safe {
+        background: var(--green);
+      }
+
+      .card-body {
+        display: grid;
+        gap: 10px;
+        padding: 16px;
+      }
+
+      .field-card {
+        border: 1px solid #e4ecea;
+        border-radius: 8px;
+        background: #f8faf9;
+        padding: 13px;
+      }
+
+      .field-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .field-value {
+        margin-top: 8px;
+        overflow: hidden;
+        color: var(--ink);
+        font-size: 15px;
+        font-weight: 800;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .password {
+        font-family: Consolas, "Courier New", monospace;
+        letter-spacing: 1px;
+      }
+
+      .small-note {
+        min-height: 86px;
+        color: #5c6b74;
+        font-size: 14px;
+        font-weight: 500;
+        line-height: 1.7;
+      }
+
+      .quick-add {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 46px;
+        margin-top: 2px;
+        border: 1px dashed #9bcfc7;
+        border-radius: 8px;
+        background: #f4fbfa;
+        color: var(--primary-2);
+        font-weight: 900;
+      }
+
+      .backdrop {
+        display: grid;
+        height: 904px;
+        place-items: center;
+        background:
+          linear-gradient(rgba(16, 32, 45, 0.34), rgba(16, 32, 45, 0.34)),
+          radial-gradient(circle at 20% 10%, rgba(15, 118, 110, 0.2), transparent 28%),
+          var(--paper);
+      }
+
+      .modal {
+        width: 1080px;
+        height: 820px;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.75);
+        border-radius: 8px;
+        background: linear-gradient(180deg, #ffffff 0%, #f5f8f8 100%);
+        box-shadow: 0 32px 90px rgba(0, 0, 0, 0.24);
+      }
+
+      .modal-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 86px;
+        padding: 0 26px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .modal-title h1 {
+        margin: 0;
+        font-size: 24px;
+      }
+
+      .modal-title p {
+        margin: 7px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .modal-content {
+        display: grid;
+        grid-template-columns: 330px 1fr;
+        height: calc(820px - 86px - 76px);
+      }
+
+      .account-workspace {
+        border-right: 1px solid var(--line);
+        background:
+          linear-gradient(180deg, rgba(227, 244, 241, 0.7), rgba(255, 255, 255, 0.82));
+        padding: 20px;
+      }
+
+      .workspace-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 14px;
+      }
+
+      .workspace-head strong {
+        font-size: 15px;
+      }
+
+      .count-pill {
+        height: 26px;
+        padding: 0 9px;
+        border-radius: 999px;
+        background: rgba(15, 118, 110, 0.12);
+        color: var(--primary-2);
+        font-size: 12px;
+        font-weight: 900;
+        line-height: 26px;
+      }
+
+      .sub-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .sub-card {
+        border: 1px solid rgba(198, 212, 209, 0.92);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.85);
+        padding: 13px;
+      }
+
+      .sub-card.active {
+        border-color: rgba(15, 118, 110, 0.5);
+        background: #10202d;
+        color: #fff;
+        box-shadow: 0 16px 28px rgba(16, 32, 45, 0.2);
+      }
+
+      .sub-card-top {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .sub-index {
+        display: grid;
+        width: 26px;
+        height: 26px;
+        flex: 0 0 auto;
+        place-items: center;
+        border-radius: 999px;
+        background: rgba(16, 32, 45, 0.08);
+        color: #40515d;
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .sub-card.active .sub-index {
+        background: rgba(255, 255, 255, 0.15);
+        color: #fff;
+      }
+
+      .sub-copy {
+        min-width: 0;
+      }
+
+      .sub-copy b {
+        display: block;
+        overflow: hidden;
+        font-size: 14px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .sub-copy span {
+        display: block;
+        overflow: hidden;
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 12px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .sub-card.active .sub-copy span {
+        color: rgba(255, 255, 255, 0.72);
+      }
+
+      .sub-add {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 48px;
+        border: 1px dashed #86c7bf;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.68);
+        color: var(--primary-2);
+        font-size: 14px;
+        font-weight: 900;
+      }
+
+      .form-side {
+        display: grid;
+        grid-template-rows: auto 1fr;
+        padding: 20px 22px;
+      }
+
+      .form-tabs {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin-bottom: 18px;
+        padding-bottom: 14px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .form-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+        align-content: start;
+      }
+
+      .form-field {
+        min-width: 0;
+      }
+
+      .form-field.wide {
+        grid-column: 1 / -1;
+      }
+
+      .label {
+        display: block;
+        margin-bottom: 7px;
+        color: #344753;
+        font-size: 13px;
+        font-weight: 900;
+      }
+
+      .input-like,
+      .textarea-like {
+        display: flex;
+        align-items: center;
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: #10202d;
+        font-size: 14px;
+        font-weight: 800;
+        box-shadow: 0 8px 18px rgba(18, 36, 50, 0.04);
+      }
+
+      .input-like {
+        height: 45px;
+        padding: 0 13px;
+      }
+
+      .textarea-like {
+        min-height: 86px;
+        align-items: flex-start;
+        padding: 12px 13px;
+        color: #53646f;
+        font-weight: 600;
+        line-height: 1.7;
+      }
+
+      .tag-picker {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .modal-foot {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 10px;
+        height: 76px;
+        padding: 0 26px;
+        border-top: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.74);
+      }
+
+      .split-window {
+        display: grid;
+        grid-template-columns: 260px 376px 1fr;
+        height: 904px;
+      }
+
+      .sidebar {
+        border-right: 1px solid var(--line);
+        background: #f4f7f6;
+        padding: 22px 16px;
+      }
+
+      .sidebar .brand {
+        margin-bottom: 22px;
+      }
+
+      .side-search {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        height: 40px;
+        margin-bottom: 16px;
+        padding: 0 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .nav-list {
+        display: grid;
+        gap: 7px;
+      }
+
+      .nav-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 52px;
+        padding: 8px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        color: #31434f;
+      }
+
+      .nav-item.active {
+        border-color: #b8dcd7;
+        background: #e7f5f2;
+        color: var(--primary-2);
+      }
+
+      .nav-copy {
+        min-width: 0;
+        flex: 1;
+      }
+
+      .nav-copy b,
+      .nav-copy span {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .nav-copy b {
+        font-size: 14px;
+      }
+
+      .nav-copy span {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .count {
+        min-width: 25px;
+        height: 24px;
+        border-radius: 999px;
+        background: #fff;
+        color: #60707a;
+        font-size: 12px;
+        font-weight: 900;
+        line-height: 24px;
+        text-align: center;
+      }
+
+      .account-list-pane {
+        border-right: 1px solid var(--line);
+        background: #fff;
+      }
+
+      .pane-head {
+        height: 108px;
+        padding: 20px 18px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .pane-head h2 {
+        margin: 0;
+        font-size: 22px;
+      }
+
+      .pane-head p {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .pane-tabs {
+        display: flex;
+        gap: 8px;
+        margin-top: 15px;
+      }
+
+      .rows {
+        display: grid;
+        gap: 8px;
+        padding: 14px;
+      }
+
+      .list-row {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        padding: 13px;
+      }
+
+      .list-row.active {
+        border-color: rgba(15, 118, 110, 0.42);
+        background: var(--primary-tint);
+      }
+
+      .row-name {
+        min-width: 0;
+      }
+
+      .row-name b {
+        display: block;
+        overflow: hidden;
+        font-size: 15px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .row-name span {
+        display: block;
+        overflow: hidden;
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 12px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .row-status {
+        height: 24px;
+        padding: 0 8px;
+        border-radius: 999px;
+        background: #fff;
+        color: var(--primary-2);
+        font-size: 12px;
+        font-weight: 900;
+        line-height: 24px;
+      }
+
+      .detail-pane {
+        display: grid;
+        grid-template-rows: 108px 1fr;
+        background: #fbfcfb;
+      }
+
+      .detail-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 26px;
+        border-bottom: 1px solid var(--line);
+        background: #fff;
+      }
+
+      .detail-title-row {
+        justify-content: flex-start;
+      }
+
+      .detail-title h1 {
+        margin: 0;
+        font-size: 26px;
+      }
+
+      .detail-title p {
+        margin: 7px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .detail-body {
+        display: grid;
+        grid-template-columns: 1fr 290px;
+        gap: 16px;
+        padding: 18px;
+      }
+
+      .detail-card,
+      .side-card {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: 0 12px 26px rgba(18, 36, 50, 0.06);
+      }
+
+      .detail-card {
+        padding: 18px;
+      }
+
+      .detail-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+
+      .detail-grid .field-card {
+        background: #fbfcfb;
+      }
+
+      .side-column {
+        display: grid;
+        gap: 12px;
+        align-content: start;
+      }
+
+      .side-card {
+        padding: 15px;
+      }
+
+      .side-card h3 {
+        margin: 0 0 10px;
+        font-size: 15px;
+      }
+
+      .log-item {
+        display: flex;
+        gap: 9px;
+        padding: 9px 0;
+        border-top: 1px solid #edf2f1;
+        color: #52636e;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .dot {
+        width: 8px;
+        height: 8px;
+        flex: 0 0 auto;
+        margin-top: 6px;
+        border-radius: 999px;
+        background: var(--primary);
+      }
+
+      .toast {
+        position: absolute;
+        left: 50%;
+        top: 110px;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        height: 42px;
+        padding: 0 15px;
+        border: 1px solid rgba(47, 133, 90, 0.28);
+        border-radius: 8px;
+        background: #fff;
+        color: #18352a;
+        font-size: 14px;
+        font-weight: 900;
+        transform: translateX(-50%);
+        box-shadow: 0 18px 40px rgba(18, 36, 50, 0.16);
+      }
+    </style>
+  </head>
+  <body data-view="overview">
+    <div class="preview-shell">
+      <section id="overview" class="view">
+        <div class="window">
+          <header class="window-topbar">
+            <div class="brand">
+              <div class="logo">V</div>
+              <div>
+                <h1 class="brand-title">VaultLink</h1>
+                <p class="brand-subtitle">18 个账号 · 6 个软件 · 本地加密存储 · 局域网同步</p>
+              </div>
+            </div>
+            <div class="top-actions">
+              <button class="btn">同步</button>
+              <button class="btn">标签</button>
+              <button class="btn">显示密码</button>
+              <button class="btn primary"><span class="icon">＋</span>添加账号</button>
+            </div>
+          </header>
+
+          <main class="main-pad">
+            <div class="toolbar">
+              <div class="search-box"><span class="icon">⌕</span>搜索软件、账号、邮箱或昵称</div>
+              <div class="filter-box">
+                <span class="chip active">全部</span>
+                <span class="chip">工作</span>
+                <span class="chip">生活</span>
+                <span class="chip">高频</span>
+                <span class="chip">按软件名</span>
+              </div>
+            </div>
+
+            <div class="card-grid">
+              <article class="account-card featured">
+                <div class="card-head">
+                  <div class="card-title-row">
+                    <div class="brand">
+                      <div class="app-avatar">GH</div>
+                      <div class="title-pack">
+                        <h2>GitHub</h2>
+                        <p>已合并 3 个账号 · 当前：主账号</p>
+                      </div>
+                    </div>
+                    <div class="mini-actions">
+                      <span class="icon-btn soft">✎</span>
+                      <span class="icon-btn soft">⧉</span>
+                      <span class="icon-btn">×</span>
+                    </div>
+                  </div>
+                  <div class="tabs">
+                    <span class="tab active">主账号</span>
+                    <span class="tab">备用号</span>
+                    <span class="tab">运营号</span>
+                    <span class="tab add">＋</span>
+                  </div>
+                  <div class="tag-row">
+                    <span class="tag work">工作</span>
+                    <span class="tag safe">高频</span>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <div class="field-card">
+                    <div class="field-top">
+                      <div class="field-label">账号</div>
+                      <span class="icon-btn">⧉</span>
+                    </div>
+                    <div class="field-value">freeze-main</div>
+                  </div>
+                  <div class="field-card">
+                    <div class="field-top">
+                      <div class="field-label">密码</div>
+                      <span class="icon-btn">◉</span>
+                    </div>
+                    <div class="field-value password">••••••••••••</div>
+                  </div>
+                  <div class="field-card">
+                    <div class="field-top">
+                      <div class="field-label">邮箱</div>
+                      <span class="icon-btn">⧉</span>
+                    </div>
+                    <div class="field-value">main@vaultlink.dev</div>
+                  </div>
+                  <div class="field-card small-note">
+                    备注：主仓库、发布包和自动化工作流都绑定在这个账号。备用号单独放在上面的 Tab 里。
+                  </div>
+                  <div class="quick-add">＋ 在 GitHub 下新增一个账号 Tab</div>
+                </div>
+              </article>
+
+              <article class="account-card">
+                <div class="card-head">
+                  <div class="card-title-row">
+                    <div class="brand">
+                      <div class="app-avatar blue">BI</div>
+                      <div class="title-pack">
+                        <h2>哔哩哔哩</h2>
+                        <p>已合并 4 个账号 · 当前：创作号</p>
+                      </div>
+                    </div>
+                    <div class="mini-actions">
+                      <span class="icon-btn soft">✎</span>
+                      <span class="icon-btn soft">⧉</span>
+                    </div>
+                  </div>
+                  <div class="tabs">
+                    <span class="tab active">创作号</span>
+                    <span class="tab">小号</span>
+                    <span class="tab">测试号</span>
+                    <span class="tab add">＋</span>
+                  </div>
+                  <div class="tag-row">
+                    <span class="tag life">生活</span>
+                    <span class="tag work">发布</span>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <div class="field-card">
+                    <div class="field-top">
+                      <div class="field-label">账号</div>
+                      <span class="icon-btn">⧉</span>
+                    </div>
+                    <div class="field-value">uploader_main</div>
+                  </div>
+                  <div class="field-card">
+                    <div class="field-top">
+                      <div class="field-label">密码</div>
+                      <span class="icon-btn">◉</span>
+                    </div>
+                    <div class="field-value password">••••••••••</div>
+                  </div>
+                  <div class="field-card">
+                    <div class="field-top">
+                      <div class="field-label">手机号</div>
+                      <span class="icon-btn">⧉</span>
+                    </div>
+                    <div class="field-value">138 **** 2606</div>
+                  </div>
+                  <div class="field-card small-note">
+                    备注：当前账号用于发布视频，小号和测试号从 Tab 切换，不再分散成多个独立卡片。
+                  </div>
+                  <div class="quick-add">＋ 在哔哩哔哩下新增一个账号 Tab</div>
+                </div>
+              </article>
+
+              <article class="account-card">
+                <div class="card-head">
+                  <div class="card-title-row">
+                    <div class="brand">
+                      <div class="app-avatar amber">GO</div>
+                      <div class="title-pack">
+                        <h2>Google</h2>
+                        <p>已合并 2 个账号 · 当前：家庭号</p>
+                      </div>
+                    </div>
+                    <div class="mini-actions">
+                      <span class="icon-btn soft">✎</span>
+                      <span class="icon-btn soft">⧉</span>
+                    </div>
+                  </div>
+                  <div class="tabs">
+                    <span class="tab active">家庭号</span>
+                    <span class="tab">工作号</span>
+                    <span class="tab add">＋</span>
+                  </div>
+                  <div class="tag-row">
+                    <span class="tag life">家庭</span>
+                    <span class="tag safe">常用</span>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <div class="field-card">
+                    <div class="field-top">
+                      <div class="field-label">账号</div>
+                      <span class="icon-btn">⧉</span>
+                    </div>
+                    <div class="field-value">family.cloud</div>
+                  </div>
+                  <div class="field-card">
+                    <div class="field-top">
+                      <div class="field-label">密码</div>
+                      <span class="icon-btn">◉</span>
+                    </div>
+                    <div class="field-value password">••••••••••••</div>
+                  </div>
+                  <div class="field-card">
+                    <div class="field-top">
+                      <div class="field-label">恢复邮箱</div>
+                      <span class="icon-btn">⧉</span>
+                    </div>
+                    <div class="field-value">backup@vaultlink.dev</div>
+                  </div>
+                  <div class="field-card small-note">
+                    备注：账号 Tab 只影响当前软件卡片内部，搜索和标签筛选仍然按每个账号生效。
+                  </div>
+                  <div class="quick-add">＋ 在 Google 下新增一个账号 Tab</div>
+                </div>
+              </article>
+            </div>
+          </main>
+        </div>
+      </section>
+
+      <section id="dialog" class="view">
+        <div class="window">
+          <div class="backdrop">
+            <div class="modal">
+              <div class="modal-head">
+                <div class="modal-title">
+                  <h1>添加账号</h1>
+                  <p>先填写软件名称，再用左侧账号工作区连续添加多个账号 Tab。</p>
+                </div>
+                <button class="btn">关闭</button>
+              </div>
+
+              <div class="modal-content">
+                <aside class="account-workspace">
+                  <div class="workspace-head">
+                    <strong>账号工作区</strong>
+                    <span class="count-pill">3 个</span>
+                  </div>
+                  <div class="sub-list">
+                    <div class="sub-card active">
+                      <div class="sub-card-top">
+                        <span class="sub-index">主</span>
+                        <div class="sub-copy">
+                          <b>主账号</b>
+                          <span>freeze-main · main@vaultlink.dev</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="sub-card">
+                      <div class="sub-card-top">
+                        <span class="sub-index">2</span>
+                        <div class="sub-copy">
+                          <b>备用号</b>
+                          <span>backup-freeze · 未填写邮箱</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="sub-card">
+                      <div class="sub-card-top">
+                        <span class="sub-index">3</span>
+                        <div class="sub-copy">
+                          <b>运营号</b>
+                          <span>ops-freeze · ops@vaultlink.dev</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="sub-add">＋ 新增账号 Tab</div>
+                  </div>
+                </aside>
+
+                <section class="form-side">
+                  <div class="form-tabs">
+                    <span class="tab active">主账号</span>
+                    <span class="tab">备用号</span>
+                    <span class="tab">运营号</span>
+                    <span class="tab add">＋ 新增</span>
+                  </div>
+
+                  <div class="form-grid">
+                    <div class="form-field">
+                      <span class="label">软件名称</span>
+                      <div class="input-like">GitHub</div>
+                    </div>
+                    <div class="form-field">
+                      <span class="label">Tab 名称</span>
+                      <div class="input-like">主账号</div>
+                    </div>
+                    <div class="form-field">
+                      <span class="label">账号</span>
+                      <div class="input-like">freeze-main</div>
+                    </div>
+                    <div class="form-field">
+                      <span class="label">昵称</span>
+                      <div class="input-like">发布主号</div>
+                    </div>
+                    <div class="form-field">
+                      <span class="label">密码</span>
+                      <div class="input-like password">••••••••••••••</div>
+                    </div>
+                    <div class="form-field">
+                      <span class="label">邮箱</span>
+                      <div class="input-like">main@vaultlink.dev</div>
+                    </div>
+                    <div class="form-field">
+                      <span class="label">手机号</span>
+                      <div class="input-like">138 **** 2606</div>
+                    </div>
+                    <div class="form-field">
+                      <span class="label">标签</span>
+                      <div class="tag-picker">
+                        <span class="chip active">工作</span>
+                        <span class="chip">生活</span>
+                        <span class="chip active">高频</span>
+                        <span class="chip">临时</span>
+                      </div>
+                    </div>
+                    <div class="form-field wide">
+                      <span class="label">备注</span>
+                      <div class="textarea-like">主仓库、发布包和自动化工作流都绑定在这个账号。切换左侧账号卡片即可继续填写备用号或运营号。</div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+
+              <div class="modal-foot">
+                <button class="btn">取消</button>
+                <button class="btn tint">保存当前 Tab</button>
+                <button class="btn primary">保存全部账号</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="detail" class="view">
+        <div class="window split-window">
+          <aside class="sidebar">
+            <div class="brand">
+              <div class="logo">V</div>
+              <div>
+                <h1 class="brand-title">VaultLink</h1>
+                <p class="brand-subtitle">软件账号库</p>
+              </div>
+            </div>
+            <div class="side-search"><span class="icon">⌕</span>搜索软件</div>
+            <div class="nav-list">
+              <div class="nav-item active">
+                <div class="app-avatar">GH</div>
+                <div class="nav-copy">
+                  <b>GitHub</b>
+                  <span>3 个账号 · 工作</span>
+                </div>
+                <span class="count">3</span>
+              </div>
+              <div class="nav-item">
+                <div class="app-avatar blue">BI</div>
+                <div class="nav-copy">
+                  <b>哔哩哔哩</b>
+                  <span>4 个账号 · 发布</span>
+                </div>
+                <span class="count">4</span>
+              </div>
+              <div class="nav-item">
+                <div class="app-avatar amber">GO</div>
+                <div class="nav-copy">
+                  <b>Google</b>
+                  <span>2 个账号 · 家庭</span>
+                </div>
+                <span class="count">2</span>
+              </div>
+              <div class="nav-item">
+                <div class="app-avatar green">WX</div>
+                <div class="nav-copy">
+                  <b>微信开放平台</b>
+                  <span>2 个账号 · 工作</span>
+                </div>
+                <span class="count">2</span>
+              </div>
+            </div>
+          </aside>
+
+          <section class="account-list-pane">
+            <div class="pane-head">
+              <h2>GitHub</h2>
+              <p>同一个软件下的多个账号在这里集中管理。</p>
+              <div class="pane-tabs">
+                <span class="tab active">账号</span>
+                <span class="tab">标签</span>
+                <span class="tab add">＋</span>
+              </div>
+            </div>
+            <div class="rows">
+              <div class="list-row active">
+                <div class="list-row-main">
+                  <div class="row-name">
+                    <b>主账号</b>
+                    <span>freeze-main · main@vaultlink.dev</span>
+                  </div>
+                  <span class="row-status">当前</span>
+                </div>
+              </div>
+              <div class="list-row">
+                <div class="list-row-main">
+                  <div class="row-name">
+                    <b>备用号</b>
+                    <span>backup-freeze · backup@vaultlink.dev</span>
+                  </div>
+                  <span class="row-status">备用</span>
+                </div>
+              </div>
+              <div class="list-row">
+                <div class="list-row-main">
+                  <div class="row-name">
+                    <b>运营号</b>
+                    <span>ops-freeze · ops@vaultlink.dev</span>
+                  </div>
+                  <span class="row-status">运营</span>
+                </div>
+              </div>
+              <div class="sub-add">＋ 在 GitHub 下新增账号</div>
+            </div>
+          </section>
+
+          <section class="detail-pane">
+            <div class="detail-head">
+              <div class="detail-title-row">
+                <div class="app-avatar">GH</div>
+                <div class="detail-title">
+                  <h1>主账号</h1>
+                  <p>GitHub · freeze-main · 上次更新 2026-07-06 21:30</p>
+                </div>
+              </div>
+              <div class="top-actions">
+                <button class="btn">复制账号</button>
+                <button class="btn">编辑</button>
+                <button class="btn primary">新增同软件账号</button>
+              </div>
+            </div>
+
+            <div class="detail-body">
+              <div class="detail-card">
+                <div class="detail-grid">
+                  <div class="field-card">
+                    <div class="field-label">账号</div>
+                    <div class="field-value">freeze-main</div>
+                  </div>
+                  <div class="field-card">
+                    <div class="field-label">昵称</div>
+                    <div class="field-value">发布主号</div>
+                  </div>
+                  <div class="field-card">
+                    <div class="field-label">密码</div>
+                    <div class="field-value password">••••••••••••</div>
+                  </div>
+                  <div class="field-card">
+                    <div class="field-label">邮箱</div>
+                    <div class="field-value">main@vaultlink.dev</div>
+                  </div>
+                  <div class="field-card">
+                    <div class="field-label">手机号</div>
+                    <div class="field-value">138 **** 2606</div>
+                  </div>
+                  <div class="field-card">
+                    <div class="field-label">标签</div>
+                    <div class="tag-row">
+                      <span class="tag work">工作</span>
+                      <span class="tag safe">高频</span>
+                    </div>
+                  </div>
+                  <div class="field-card small-note" style="grid-column: 1 / -1">
+                    备注：主仓库、发布包和自动化工作流都绑定在这个账号。右侧保留同步记录和安全提示，适合账号数量很多时长期使用。
+                  </div>
+                </div>
+              </div>
+
+              <aside class="side-column">
+                <div class="side-card">
+                  <h3>快捷操作</h3>
+                  <div class="tag-picker">
+                    <span class="chip active">显示密码</span>
+                    <span class="chip">复制邮箱</span>
+                    <span class="chip">复制备注</span>
+                  </div>
+                </div>
+                <div class="side-card">
+                  <h3>最近记录</h3>
+                  <div class="log-item"><span class="dot"></span><span>刚刚复制了账号名，轻提示在顶部显示。</span></div>
+                  <div class="log-item"><span class="dot"></span><span>今天 21:30 更新了主账号备注。</span></div>
+                  <div class="log-item"><span class="dot"></span><span>今天 20:12 完成局域网同步。</span></div>
+                </div>
+              </aside>
+            </div>
+          </section>
+          <div class="toast">✓ 配置已导出到指定位置</div>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const fileName = decodeURIComponent(location.pathname.split("/").pop() || "");
+      const inferredView = fileName.includes("dialog")
+        ? "dialog"
+        : fileName.includes("detail")
+          ? "detail"
+          : "overview";
+      const view = params.get("view") || inferredView;
+      document.body.dataset.view = view;
+    </script>
+  </body>
+</html>

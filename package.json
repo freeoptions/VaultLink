@@ -1,0 +1,46 @@
+{
+  "name": "vaultlink",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "android:init": "tauri android init",
+    "android:dev": "tauri android dev",
+    "android:build": "tauri android build",
+    "tauri:build": "tauri build --no-bundle && npm run copy-exe",
+    "copy-exe": "shx mkdir -p D:/@Software/VaultLink && shx cp ../exe-location/target/release/vaultlink.exe D:/@Software/VaultLink/VaultLink.exe && echo VaultLink.exe copied to D:/@Software/VaultLink/"
+  },
+  "dependencies": {
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-dropdown-menu": "^2.1.16",
+    "@radix-ui/react-slot": "^1.2.4",
+    "@radix-ui/react-tabs": "^1.1.13",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-fs": "^2.4.5",
+    "@tauri-apps/plugin-opener": "^2",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "html2canvas": "^1.4.1",
+    "lucide-react": "^0.577.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "tailwind-merge": "^3.5.0",
+    "tailwindcss": "^3.4.19"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.2",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "autoprefixer": "^10.4.27",
+    "postcss": "^8.5.8",
+    "shx": "^0.4.0",
+    "typescript": "~5.8.3",
+    "vite": "^7.0.4",
+    "ws": "^8.20.1"
+  }
+}
