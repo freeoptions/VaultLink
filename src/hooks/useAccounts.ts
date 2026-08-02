@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Account, STORAGE_KEY, Tag, TAGS_STORAGE_KEY, THEME_STORAGE_KEY } from '../types';
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { DEFAULT_THEME, ThemeConfig, normalizeThemeConfig } from '../lib/theme';
 
 const loadFromFile = async (): Promise<{ accounts: Account[]; tags: Tag[]; theme: ThemeConfig }> => {
@@ -41,14 +42,25 @@ const loadFromFile = async (): Promise<{ accounts: Account[]; tags: Tag[]; theme
   }
 };
 
-const saveToFile = (accounts: Account[], tags: Tag[], theme: ThemeConfig) => {
+let saveQueue: Promise<void> = Promise.resolve();
+
+const persistSnapshot = async (accounts: Account[], tags: Tag[], theme: ThemeConfig) => {
   const data = JSON.stringify({ accounts, tags, theme });
-  invoke('write_data_file', { data }).catch(() => {
+  try {
+    await invoke('write_data_file', { data });
+  } catch {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(accounts));
     localStorage.setItem(TAGS_STORAGE_KEY, JSON.stringify(tags));
     localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify(theme));
-  });
+  }
 };
+
+const saveToFile = (accounts: Account[], tags: Tag[], theme: ThemeConfig) => {
+  saveQueue = saveQueue.then(() => persistSnapshot(accounts, tags, theme));
+  return saveQueue;
+};
+
+export const flushPendingDataWrites = () => saveQueue;
 
 export const useAccounts = () => {
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -94,6 +106,31 @@ export const useAccounts = () => {
     refresh();
   }, []);
 
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: UnlistenFn | undefined;
+
+    void listen('sync-notice', async () => {
+      await flushPendingDataWrites();
+      if (!disposed) {
+        await refresh({ silent: true });
+      }
+    }).then((stopListening) => {
+      if (disposed) {
+        void stopListening();
+      } else {
+        unlisten = stopListening;
+      }
+    });
+
+    return () => {
+      disposed = true;
+      if (unlisten) {
+        void unlisten();
+      }
+    };
+  }, []);
+
   const visibleAccounts = accounts.filter(account => !account.isDeleted);
   const visibleTags = tags.filter(tag => !tag.isDeleted);
 
@@ -107,16 +144,26 @@ export const useAccounts = () => {
     saveToFile(newAccounts, newTags, nextTheme);
   };
 
-  const addAccount = (account: Omit<Account, 'id' | 'createdAt' | 'updatedAt'>) => {
-    const newAccount: Account = {
-      ...account,
-      id: crypto.randomUUID(),
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      isDeleted: false,
-    };
-    const updated = [newAccount, ...accountsRef.current];
+  const addAccounts = (newAccountItems: Array<Omit<Account, 'id' | 'createdAt' | 'updatedAt'>>) => {
+    const baseTime = Date.now();
+    const newAccounts: Account[] = newAccountItems.map((account, index) => {
+      const timestamp = baseTime + index;
+
+      return {
+        ...account,
+        id: crypto.randomUUID(),
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        isDeleted: false,
+      };
+    });
+    const updated = [...newAccounts, ...accountsRef.current];
     saveData(updated, tagsRef.current);
+    return newAccounts;
+  };
+
+  const addAccount = (account: Omit<Account, 'id' | 'createdAt' | 'updatedAt'>) => {
+    const [newAccount] = addAccounts([account]);
     return newAccount;
   };
 
@@ -191,7 +238,16 @@ export const useAccounts = () => {
   };
 
   const reorderTags = (newTags: Tag[]) => {
-    saveData(accountsRef.current, newTags);
+    const now = Date.now();
+    const nextOrder = new Map(newTags.map((tag, index) => [tag.id, index]));
+    const updatedTags = tagsRef.current.map((tag) => {
+      const order = nextOrder.get(tag.id);
+      if (order === undefined || order === tag.order) {
+        return tag;
+      }
+      return { ...tag, order, updatedAt: now };
+    });
+    saveData(accountsRef.current, updatedTags);
   };
 
   const updateTheme = (nextTheme: ThemeConfig) => {
@@ -208,6 +264,7 @@ export const useAccounts = () => {
     theme,
     isLoading,
     addAccount,
+    addAccounts,
     updateAccount,
     deleteAccount,
     restoreAccount,

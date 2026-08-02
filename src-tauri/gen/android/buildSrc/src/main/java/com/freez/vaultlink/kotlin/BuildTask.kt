@@ -84,7 +84,9 @@ open class BuildTask : DefaultTask() {
             "LoudAndProud"
         }
 
-        return """{"dev":false,"features":[],"args":[],"noise_level":"$noiseLevel","vars":{},"config":[],"target_device":null}"""
+        // Android Studio 的 Debug 任务也直接运行内嵌前端，不依赖 Vite 开发服务器。
+        // custom-protocol 缺失时，Tauri 会把 tauri.localhost 当作远程地址请求并直接报错。
+        return """{"dev":false,"features":["custom-protocol"],"args":[],"noise_level":"$noiseLevel","vars":{},"config":[],"target_device":null}"""
     }
 
     private fun ndkBinDir(): String {
@@ -162,7 +164,7 @@ open class BuildTask : DefaultTask() {
         val profile = if (release || nativeProfileForAndroidDebug()) "release" else "debug"
         val sourceLib = File(
             workingDir,
-            "../../exe-location/target/${
+            "target/${
                 when (target) {
                     "aarch64" -> "aarch64-linux-android"
                     "armv7" -> "armv7-linux-androideabi"

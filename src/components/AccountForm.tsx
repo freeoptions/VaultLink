@@ -201,11 +201,12 @@ export const AccountForm = ({
 
   const toggleTag = (tagId: string) => {
     if (!activeItem) return;
-    updateActiveItem({
-      tags: activeItem.tags.includes(tagId)
+    const nextTags = activeItem.tags.includes(tagId)
         ? activeItem.tags.filter((id) => id !== tagId)
-        : [...activeItem.tags, tagId],
-    });
+        : [...activeItem.tags, tagId];
+
+    setFormError('');
+    setItems((current) => current.map((item) => ({ ...item, tags: nextTags })));
   };
 
   const handleForceClose = () => {
@@ -237,6 +238,7 @@ export const AccountForm = ({
 
     const meaningfulItems = items.filter(isMeaningfulItem);
     const submitItems = meaningfulItems.length > 0 ? meaningfulItems : items;
+    const syncedTags = activeItem?.tags || [];
 
     const submitData: AccountFormSubmitData = {
       platform: trimmedPlatform,
@@ -249,7 +251,7 @@ export const AccountForm = ({
         email: item.email.trim() || undefined,
         phone: item.phone.trim() || undefined,
         notes: item.notes.trim() || undefined,
-        tags: item.tags,
+        tags: syncedTags,
         isDeleted: false,
       })),
     };
@@ -354,26 +356,6 @@ export const AccountForm = ({
               </aside>
 
               <section className="account-form-main">
-                <div className="account-form-tabs">
-                  {items.map((item, index) => (
-                    <button
-                      key={item.key}
-                      type="button"
-                      onClick={() => setActiveKey(item.key)}
-                      className={cn(
-                        'account-form-tab',
-                        item.key === activeKey && 'account-form-tab-active',
-                      )}
-                    >
-                      {getCardTitle(item, index)}
-                    </button>
-                  ))}
-                  <button type="button" onClick={addSubAccount} className="account-form-tab account-form-tab-add">
-                    <Plus className="h-3.5 w-3.5" />
-                    新增
-                  </button>
-                </div>
-
                 {formError && (
                   <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
                     {formError}
@@ -517,7 +499,7 @@ export const AccountForm = ({
                     />
                   </div>
 
-                  <div className="grid gap-2">
+                  <div className="account-form-wide grid gap-2">
                     <label className="flex items-center gap-1 text-sm font-medium text-slate-800">
                       <TagIcon className="h-4 w-4" />
                       标签

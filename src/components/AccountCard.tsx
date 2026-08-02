@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, type WheelEvent, useEffect, useMemo, useState } from 'react';
 import {
   Check,
   Copy,
@@ -76,6 +76,15 @@ export const AccountCard = ({
     ? getTabLabel(account, accounts.findIndex((item) => item.id === account.id), accounts.length)
     : '';
 
+  const handleAccountTabsWheel = (event: WheelEvent<HTMLDivElement>) => {
+    const container = event.currentTarget;
+    if (container.scrollWidth <= container.clientWidth) return;
+    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+
+    event.preventDefault();
+    container.scrollLeft += event.deltaY;
+  };
+
   const copyToClipboard = async (text: string, fieldName: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -139,7 +148,7 @@ export const AccountCard = ({
   }
 
   return (
-    <Card className="theme-card overflow-hidden border-slate-200 bg-white shadow-sm transition-all duration-200 hover:shadow-md">
+    <Card className="theme-card flex h-full flex-col overflow-hidden border-slate-200 bg-white shadow-sm transition-all duration-200 hover:shadow-md">
       <CardHeader className="theme-card-header space-y-3 border-b border-slate-100 p-4">
         <div className="flex min-w-0 items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
@@ -185,7 +194,7 @@ export const AccountCard = ({
         </div>
 
         <Tabs.Root value={account.id} onValueChange={setActiveAccountId}>
-          <Tabs.List className="flex gap-2 overflow-x-auto pb-0.5">
+          <Tabs.List className="flex gap-2 overflow-x-auto overscroll-contain pb-0.5" onWheel={handleAccountTabsWheel}>
             {accounts.map((item, index) => (
               <Tabs.Trigger
                 key={item.id}
@@ -224,7 +233,7 @@ export const AccountCard = ({
         )}
       </CardHeader>
 
-      <CardContent className="space-y-2.5 p-4">
+      <CardContent className="flex flex-1 flex-col gap-2.5 p-4">
         <FieldBlock
           icon={<UserRound className="h-3.5 w-3.5" />}
           label="账号"
@@ -290,7 +299,7 @@ export const AccountCard = ({
           <button
             type="button"
             onClick={() => onAddToPlatform(account)}
-            className="theme-dashed-action flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-dashed text-sm font-semibold transition-colors"
+            className="theme-dashed-action mt-auto flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-dashed text-sm font-semibold transition-colors"
           >
             <Plus className="h-4 w-4" />
             在 {account.platform} 下新增一个账号 Tab

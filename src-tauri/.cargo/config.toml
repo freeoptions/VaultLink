@@ -1,6 +1,7 @@
 [build]
-# 将编译输出目录设置为项目根目录下的 exe-location
-target-dir = "../../exe-location/target"
+# Android Studio 的 Tauri 构建会把 CARGO_TARGET_DIR 固定到 src-tauri/target。
+# 这里保持同一路径，避免 Rust 已编译成功后，Tauri 去外部 exe-location 误找 .so。
+target-dir = "target"
 
 [target.aarch64-linux-android]
 linker = "E:/@imFile-Download/AndroidSdk/ndk/29.0.13846066/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android24-clang.cmd"

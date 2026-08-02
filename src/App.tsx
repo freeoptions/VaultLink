@@ -26,6 +26,7 @@ import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
 import { Card, CardContent } from './components/ui/card';
 import { ThemeConfig, applyThemeToDocument } from './lib/theme';
+import { matchesSearchQuery } from './lib/pinyinSearch';
 
 type AccountFormSubmitData = {
   platform: string;
@@ -38,6 +39,7 @@ function App() {
     tags,
     isLoading,
     addAccount,
+    addAccounts,
     updateAccount,
     deleteAccount,
     restoreAccount,
@@ -118,15 +120,13 @@ function App() {
 
   const filteredAndSortedAccounts = useMemo(() => {
     let filtered = accounts;
-    const query = searchQuery.trim().toLowerCase();
+    const query = searchQuery.trim();
 
     if (query) {
       filtered = filtered.filter((account) =>
-        account.platform.toLowerCase().includes(query) ||
-        account.tabName?.toLowerCase().includes(query) ||
-        account.username.toLowerCase().includes(query) ||
-        account.email?.toLowerCase().includes(query) ||
-        account.nickname?.toLowerCase().includes(query)
+        [account.platform, account.tabName, account.username, account.email, account.nickname]
+          .filter((value): value is string => Boolean(value))
+          .some((value) => matchesSearchQuery(value, query))
       );
     }
 
@@ -158,16 +158,7 @@ function App() {
     });
 
     return Array.from(groups.values()).map((group) =>
-      [...group].sort((a, b) => {
-        if (recentAccountId) {
-          if (a.id === recentAccountId) return -1;
-          if (b.id === recentAccountId) return 1;
-        }
-
-        const aName = a.tabName?.trim() || a.nickname?.trim() || a.username;
-        const bName = b.tabName?.trim() || b.nickname?.trim() || b.username;
-        return aName.localeCompare(bName, 'zh-CN');
-      })
+      [...group].sort((a, b) => a.createdAt - b.createdAt || a.updatedAt - b.updatedAt)
     );
   }, [filteredAndSortedAccounts, recentAccountId]);
 
@@ -180,19 +171,18 @@ function App() {
   };
 
   const handleAddAccount = (data: AccountFormSubmitData) => {
-    let latestAccountId: string | null = null;
-
-    data.accounts.forEach((item) => {
+    const accountItems = data.accounts.map((item) => {
       const accountData = { ...item };
       delete accountData.sourceId;
-      const newAccount = addAccount({
+
+      return {
         platform: data.platform,
         ...accountData,
-      });
-      latestAccountId = newAccount.id;
+      };
     });
+    const newAccounts = addAccounts(accountItems);
 
-    setRecentAccountId(latestAccountId);
+    setRecentAccountId(newAccounts[0]?.id ?? null);
     setTimeout(() => scrollToTop(), 100);
   };
 
@@ -255,6 +245,7 @@ function App() {
 
     let latestAccountId = editAccount.id || null;
     const currentGroup = accounts.filter((account) => account.platform === editAccount.platform);
+    const syncedGroupTags = data.accounts[0]?.tags || [];
 
     if (!editAccount.id) {
       data.accounts.forEach((item) => {
@@ -263,6 +254,7 @@ function App() {
         const newAccount = addAccount({
           platform: data.platform,
           ...accountData,
+          tags: syncedGroupTags,
         });
         latestAccountId = newAccount.id;
       });
@@ -280,6 +272,7 @@ function App() {
           updateAccount(existingAccount.id, {
             platform: data.platform,
             ...accountData,
+            tags: syncedGroupTags,
           });
           latestAccountId = existingAccount.id;
           keptExistingIds.add(existingAccount.id);
@@ -287,6 +280,7 @@ function App() {
           const newAccount = addAccount({
             platform: data.platform,
             ...accountData,
+            tags: syncedGroupTags,
           });
           latestAccountId = newAccount.id;
         }
@@ -411,7 +405,7 @@ function App() {
                   <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                   <Input
                     ref={searchInputRef}
-                    placeholder="搜索平台、账号、邮箱或昵称"
+                    placeholder="搜索平台、账号、邮箱或昵称，也支持拼音"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="theme-search-input h-12 rounded-xl border-slate-200 pl-10 pr-10 text-[15px] shadow-none"
@@ -427,7 +421,7 @@ function App() {
                   )}
                 </div>
 
-                <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                <div className="flex flex-wrap items-center gap-2 pb-1">
                   <Button
                     variant={selectedTagIds.length === 0 ? 'default' : 'outline'}
                     size="sm"
@@ -456,7 +450,7 @@ function App() {
                     variant="outline"
                     size="sm"
                     onClick={() => setSortBy(sortBy === 'platform' ? 'createdAt' : 'platform')}
-                    className="ml-auto h-9 flex-shrink-0 gap-2 rounded-full border-slate-200 bg-white px-4 shadow-none"
+                    className="h-9 flex-shrink-0 gap-2 rounded-full border-slate-200 bg-white px-4 shadow-none md:ml-auto"
                   >
                     <SlidersHorizontal className="h-4 w-4" />
                     {sortBy === 'platform' ? '按平台' : '按时间'}

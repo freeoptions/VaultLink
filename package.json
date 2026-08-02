@@ -10,13 +10,14 @@
     "tauri": "tauri",
     "android:init": "tauri android init",
     "android:dev": "tauri android dev",
-    "android:build": "tauri android build",
-    "tauri:build": "tauri build --no-bundle && npm run copy-exe",
-    "copy-exe": "shx mkdir -p D:/@Software/VaultLink && shx cp ../exe-location/target/release/vaultlink.exe D:/@Software/VaultLink/VaultLink.exe && echo VaultLink.exe copied to D:/@Software/VaultLink/"
+    "android:build": "tauri android build --apk --target aarch64 --split-per-abi --ci",
+    "android:build:all": "tauri android build --apk --target aarch64 --target armv7 --target i686 --target x86_64 --split-per-abi --ci",
+    "build:exe": "tauri build --no-bundle --ci && npm run copy-exe",
+    "tauri:build": "npm run build:exe",
+    "copy-exe": "shx mkdir -p D:/@Software/VaultLink && shx cp src-tauri/target/release/vaultlink.exe D:/@Software/VaultLink/VaultLink.exe && echo VaultLink.exe copied to D:/@Software/VaultLink/"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",
-    "@radix-ui/react-dropdown-menu": "^2.1.16",
     "@radix-ui/react-slot": "^1.2.4",
     "@radix-ui/react-tabs": "^1.1.13",
     "@tauri-apps/api": "^2",
@@ -24,8 +25,8 @@
     "@tauri-apps/plugin-opener": "^2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "html2canvas": "^1.4.1",
     "lucide-react": "^0.577.0",
+    "pinyin-pro": "^3.28.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "tailwind-merge": "^3.5.0",

@@ -21,48 +21,102 @@ use std::collections::HashSet;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddrV4, UdpSocket};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::{path::BaseDirectory, Emitter};
+#[cfg(mobile)]
+use tauri::path::BaseDirectory;
+use tauri::Emitter;
 use uuid::Uuid;
 
-// 获取数据存储路径
-fn get_storage_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+#[cfg(desktop)]
+fn get_app_data_path(_app: &tauri::AppHandle, file_name: &str) -> Result<PathBuf, String> {
+    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe_dir = exe_path
+        .parent()
+        .ok_or_else(|| "无法读取软件所在目录".to_string())?;
+    Ok(exe_dir.join(file_name))
+}
+
+#[cfg(mobile)]
+fn get_app_data_path(app: &tauri::AppHandle, file_name: &str) -> Result<PathBuf, String> {
     app.path()
-        .resolve("AccountInfo.json", BaseDirectory::AppData)
+        .resolve(file_name, BaseDirectory::AppData)
         .map_err(|e| e.to_string())
+}
+
+// Windows 使用 exe 同级目录；Android 使用系统应用数据目录。
+fn get_storage_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    get_app_data_path(app, "AccountInfo.json")
 }
 
 fn get_device_id_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .resolve("device_id.txt", BaseDirectory::AppData)
-        .map_err(|e| e.to_string())
+    get_app_data_path(app, "device_id.txt")
 }
 
 fn get_device_name_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .resolve("device_name.txt", BaseDirectory::AppData)
-        .map_err(|e| e.to_string())
+    get_app_data_path(app, "device_name.txt")
+}
+
+fn get_backup_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    get_app_data_path(app, "backups")
+}
+
+static DATA_FILE_LOCK: Mutex<()> = Mutex::new(());
+
+fn unix_time_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 #[cfg(desktop)]
-fn legacy_app_data_paths() -> Vec<PathBuf> {
+fn legacy_app_file_paths(file_name: &str) -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    let legacy_dirs = ["MyAccountManager", "com.freez.myaccountmanager"];
+    let legacy_dirs = [
+        "com.freez.vaultlink",
+        "VaultLink",
+        "MyAccountManager",
+        "com.freez.myaccountmanager",
+    ];
 
     for env_key in ["APPDATA", "LOCALAPPDATA"] {
         if let Some(base) = std::env::var_os(env_key) {
             for legacy_dir in legacy_dirs {
-                paths.push(
-                    PathBuf::from(&base)
-                        .join(legacy_dir)
-                        .join("AccountInfo.json"),
-                );
+                paths.push(PathBuf::from(&base).join(legacy_dir).join(file_name));
             }
         }
     }
 
     paths
+}
+
+#[cfg(desktop)]
+fn legacy_app_data_paths() -> Vec<PathBuf> {
+    legacy_app_file_paths("AccountInfo.json")
+}
+
+#[cfg(desktop)]
+fn migrate_small_app_file(target_path: &PathBuf, file_name: &str) -> Result<bool, String> {
+    if target_path.exists() {
+        return Ok(false);
+    }
+
+    for source_path in legacy_app_file_paths(file_name) {
+        if source_path == *target_path || !source_path.exists() {
+            continue;
+        }
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        fs::copy(source_path, target_path).map_err(|e| e.to_string())?;
+        return Ok(true);
+    }
+
+    Ok(false)
 }
 
 #[cfg(desktop)]
@@ -98,7 +152,10 @@ fn migrate_legacy_app_data(
     Ok(None)
 }
 
-fn backup_data_file(app: &tauri::AppHandle, reason: &str) -> Result<Option<PathBuf>, String> {
+fn backup_data_file_unlocked(
+    app: &tauri::AppHandle,
+    reason: &str,
+) -> Result<Option<PathBuf>, String> {
     let data_path = get_storage_path(app)?;
 
     if !data_path.exists() {
@@ -108,16 +165,18 @@ fn backup_data_file(app: &tauri::AppHandle, reason: &str) -> Result<Option<PathB
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| e.to_string())?
-        .as_secs();
-    let backup_dir = app
-        .path()
-        .resolve("backups", BaseDirectory::AppData)
-        .map_err(|e| e.to_string())?;
+        .as_millis();
+    let backup_dir = get_backup_dir(app)?;
     fs::create_dir_all(&backup_dir).map_err(|e| e.to_string())?;
 
     let backup_path = backup_dir.join(format!("AccountInfo.{}.{}.json", reason, timestamp));
     fs::copy(&data_path, &backup_path).map_err(|e| e.to_string())?;
     Ok(Some(backup_path))
+}
+
+fn backup_data_file(app: &tauri::AppHandle, reason: &str) -> Result<Option<PathBuf>, String> {
+    let _guard = DATA_FILE_LOCK.lock().map_err(|e| e.to_string())?;
+    backup_data_file_unlocked(app, reason)
 }
 
 fn parse_sync_payload(content: &str) -> Result<SyncPayload, String> {
@@ -162,8 +221,13 @@ fn file_updated_at(payload: &SyncPayload) -> i64 {
     account_max.max(tag_max).max(theme_updated_at)
 }
 
-fn load_local_file_content(app: &tauri::AppHandle) -> Result<String, String> {
+fn load_local_file_content_unlocked(app: &tauri::AppHandle) -> Result<String, String> {
     let data_path = get_storage_path(app)?;
+    let temporary_path = data_path.with_extension("json.tmp");
+
+    if !data_path.exists() && temporary_path.exists() {
+        fs::rename(&temporary_path, &data_path).map_err(|e| e.to_string())?;
+    }
 
     if data_path.exists() {
         let content = fs::read_to_string(&data_path).map_err(|e| e.to_string())?;
@@ -205,6 +269,11 @@ fn load_local_file_content(app: &tauri::AppHandle) -> Result<String, String> {
     Ok(default_sync_payload_json())
 }
 
+fn load_local_file_content(app: &tauri::AppHandle) -> Result<String, String> {
+    let _guard = DATA_FILE_LOCK.lock().map_err(|e| e.to_string())?;
+    load_local_file_content_unlocked(app)
+}
+
 fn local_file_metadata(app: &tauri::AppHandle) -> Result<FileSyncMetadata, String> {
     let content = load_local_file_content(app)?;
     let payload = parse_sync_payload(&content)?;
@@ -233,6 +302,9 @@ fn local_file_envelope(app: &tauri::AppHandle) -> Result<FileSyncEnvelope, Strin
 fn ensure_device_id(app: &tauri::AppHandle) -> Result<String, String> {
     let path = get_device_id_path(app)?;
 
+    #[cfg(desktop)]
+    let _ = migrate_small_app_file(&path, "device_id.txt")?;
+
     if path.exists() {
         return fs::read_to_string(&path)
             .map(|value| value.trim().to_string())
@@ -256,14 +328,32 @@ fn read_data_file(app: tauri::AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 fn write_data_file(app: tauri::AppHandle, data: String) -> Result<(), String> {
+    let _guard = DATA_FILE_LOCK.lock().map_err(|e| e.to_string())?;
+    let incoming_payload = parse_sync_payload(&data)?;
+    let current_content = load_local_file_content_unlocked(&app)?;
+    let current_payload = parse_sync_payload(&current_content)?;
+    let merged_payload = merge_sync_payloads(current_payload, incoming_payload);
+    write_sync_payload_unlocked(&app, &merged_payload)
+}
+
+fn write_sync_payload_unlocked(
+    app: &tauri::AppHandle,
+    payload: &SyncPayload,
+) -> Result<(), String> {
     let data_path = get_storage_path(&app)?;
-    let normalized = normalize_payload_content(data)?;
+    let normalized = serde_json::to_string(payload).map_err(|e| e.to_string())?;
 
     if let Some(parent) = data_path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    fs::write(&data_path, normalized).map_err(|e| e.to_string())
+    let temporary_path = data_path.with_extension("json.tmp");
+    fs::write(&temporary_path, normalized).map_err(|e| e.to_string())?;
+
+    if data_path.exists() {
+        fs::remove_file(&data_path).map_err(|e| e.to_string())?;
+    }
+    fs::rename(&temporary_path, &data_path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -289,8 +379,23 @@ fn start_sync_http_server(app: tauri::AppHandle) {
                 .with_state(app.clone());
 
             let listener = match tokio::net::TcpListener::bind(("0.0.0.0", SYNC_PORT)).await {
-                Ok(listener) => listener,
-                Err(_) => return,
+                Ok(listener) => {
+                    if let Ok(mut state) = app.state::<Mutex<SyncState>>().lock() {
+                        state.server_ready = true;
+                        state.server_error = None;
+                    }
+                    listener
+                }
+                Err(error) => {
+                    let message = format!("同步服务端口 {} 启动失败：{}", SYNC_PORT, error);
+                    if let Ok(mut state) = app.state::<Mutex<SyncState>>().lock() {
+                        state.server_ready = false;
+                        state.server_error = Some(message.clone());
+                    }
+                    let _ = app.emit("sync-server-error", message.clone());
+                    eprintln!("{}", message);
+                    return;
+                }
             };
 
             let _ = axum::serve(
@@ -401,6 +506,8 @@ pub fn run() {
             start_sync_discovery,
             stop_sync_discovery,
             get_discovered_devices,
+            get_sync_server_status,
+            probe_known_devices,
             request_sync_from_device,
             request_file_sync_from_device
         ])
@@ -525,6 +632,8 @@ struct DeviceInfo {
     name: String,
     device_type: String, // "Windows" or "Android"
     ip: String,
+    port: u16,
+    last_seen_at: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -536,12 +645,22 @@ struct DiscoveryAnnouncement {
     name: String,
     device_type: String,
     port: u16,
+    #[serde(default = "default_announce")]
+    announce: bool,
+}
+
+fn default_announce() -> bool {
+    true
 }
 
 struct SyncState {
     device_id: String,
     discovered_devices: Vec<DeviceInfo>,
     mdns: Option<ServiceDaemon>,
+    discovery_running: bool,
+    discovery_stop: Option<Arc<AtomicBool>>,
+    server_ready: bool,
+    server_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -556,13 +675,17 @@ impl Default for SyncState {
             device_id: String::new(),
             discovered_devices: Vec::new(),
             mdns: None,
+            discovery_running: false,
+            discovery_stop: None,
+            server_ready: false,
+            server_error: None,
         }
     }
 }
 
 const SERVICE_TYPE: &str = "_vaultlink._tcp.local.";
-const SYNC_PORT: u16 = 8080;
-const MULTICAST_PORT: u16 = 53317;
+const SYNC_PORT: u16 = 53318;
+const MULTICAST_PORT: u16 = 53318;
 const MULTICAST_ADDR: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 167);
 const DISCOVERY_VERSION: &str = "1.0";
 
@@ -582,6 +705,8 @@ fn get_device_info(app: tauri::AppHandle) -> Result<DeviceInfo, String> {
         name,
         device_type,
         ip,
+        port: SYNC_PORT,
+        last_seen_at: unix_time_millis(),
     })
 }
 
@@ -591,6 +716,10 @@ fn fallible_hostname() -> String {
 
 fn read_device_name(app: &tauri::AppHandle) -> Result<String, String> {
     let path = get_device_name_path(app)?;
+
+    #[cfg(desktop)]
+    let _ = migrate_small_app_file(&path, "device_name.txt")?;
+
     if path.exists() {
         let name = fs::read_to_string(&path)
             .map_err(|e| e.to_string())?
@@ -620,7 +749,20 @@ fn set_device_name(app: tauri::AppHandle, name: String) -> Result<DeviceInfo, St
     }
     fs::write(path, trimmed).map_err(|e| e.to_string())?;
 
-    get_device_info(app)
+    if let Ok(mut state) = app.state::<Mutex<SyncState>>().lock() {
+        if let Some(stop) = state.discovery_stop.take() {
+            stop.store(true, Ordering::Relaxed);
+        }
+        if let Some(mdns) = state.mdns.take() {
+            let _ = mdns.shutdown();
+        }
+        state.discovery_running = false;
+    }
+
+    let device = get_device_info(app.clone())?;
+    std::thread::sleep(Duration::from_millis(120));
+    let _ = start_sync_discovery(app.clone(), app.state::<Mutex<SyncState>>());
+    Ok(device)
 }
 
 fn is_usable_lan_ipv4(ip: Ipv4Addr) -> bool {
@@ -823,11 +965,12 @@ fn make_discovery_announcement(device: &DeviceInfo) -> DiscoveryAnnouncement {
         name: device.name.clone(),
         device_type: device.device_type.clone(),
         port: SYNC_PORT,
+        announce: true,
     }
 }
 
 fn is_vaultlink_announcement(packet: &DiscoveryAnnouncement) -> bool {
-    packet.app == "VaultLink" && packet.port == SYNC_PORT && !packet.id.is_empty()
+    packet.app == "VaultLink" && packet.port > 0 && !packet.id.is_empty()
 }
 
 fn subnet_scan_targets(local_interfaces: &[LanInterface]) -> Vec<String> {
@@ -905,6 +1048,7 @@ fn remember_discovered_device(app: &tauri::AppHandle, device: DeviceInfo) {
         return;
     }
 
+    let mut emitted_device = None;
     if let Ok(mut state) = app.state::<Mutex<SyncState>>().lock() {
         let local_ips = local_lan_ipv4_addresses();
         if device.id == state.device_id {
@@ -928,10 +1072,23 @@ fn remember_discovered_device(app: &tauri::AppHandle, device: DeviceInfo) {
             .iter_mut()
             .find(|d| d.id == device.id)
         {
-            *existing = device;
+            let should_emit = existing.ip != device.ip
+                || existing.name != device.name
+                || existing.device_type != device.device_type
+                || existing.port != device.port
+                || device.last_seen_at.saturating_sub(existing.last_seen_at) > 10_000;
+            *existing = device.clone();
+            if should_emit {
+                emitted_device = Some(device);
+            }
         } else {
-            state.discovered_devices.push(device);
+            state.discovered_devices.push(device.clone());
+            emitted_device = Some(device);
         }
+    }
+
+    if let Some(device) = emitted_device {
+        let _ = app.emit("sync-device-seen", device);
     }
 }
 
@@ -939,6 +1096,7 @@ fn start_multicast_discovery(
     app: tauri::AppHandle,
     current_device: DeviceInfo,
     local_interfaces: Vec<LanInterface>,
+    stop: Arc<AtomicBool>,
 ) {
     if local_interfaces.is_empty() {
         return;
@@ -947,7 +1105,17 @@ fn start_multicast_discovery(
     std::thread::spawn(move || {
         let socket = match UdpSocket::bind(("0.0.0.0", MULTICAST_PORT)) {
             Ok(socket) => socket,
-            Err(_) => return,
+            Err(error) => {
+                if let Ok(mut state) = app.state::<Mutex<SyncState>>().lock() {
+                    state.discovery_running = false;
+                    state.discovery_stop = None;
+                }
+                let _ = app.emit(
+                    "sync-discovery-error",
+                    format!("设备发现端口 {} 启动失败：{}", MULTICAST_PORT, error),
+                );
+                return;
+            }
         };
 
         let _ = socket.set_nonblocking(true);
@@ -958,27 +1126,29 @@ fn start_multicast_discovery(
             let _ = socket.join_multicast_v4(&MULTICAST_ADDR, &iface.ip);
         }
 
-        let announcement = match serde_json::to_vec(&make_discovery_announcement(&current_device)) {
+        let announcement_packet = make_discovery_announcement(&current_device);
+        let announcement = match serde_json::to_vec(&announcement_packet) {
             Ok(announcement) => announcement,
             Err(_) => return,
         };
+        let response = serde_json::to_vec(&DiscoveryAnnouncement {
+            announce: false,
+            ..announcement_packet
+        })
+        .unwrap_or_else(|_| announcement.clone());
         let send_sockets = discovery_send_sockets(&local_interfaces);
         let broadcast_targets = discovery_broadcast_targets(&local_interfaces);
 
-        for _ in 0..3 {
-            send_discovery_packets(&send_sockets, &announcement, &broadcast_targets);
-            std::thread::sleep(Duration::from_millis(280));
-        }
-
-        let start = SystemTime::now();
         let mut buffer = [0_u8; 2048];
+        let mut last_announcement = UNIX_EPOCH;
 
-        loop {
-            if start
+        while !stop.load(Ordering::Relaxed) {
+            if last_announcement
                 .elapsed()
-                .map_or(true, |elapsed| elapsed > Duration::from_secs(8))
+                .map_or(true, |elapsed| elapsed >= Duration::from_secs(2))
             {
-                break;
+                send_discovery_packets(&send_sockets, &announcement, &broadcast_targets);
+                last_announcement = SystemTime::now();
             }
 
             match socket.recv_from(&mut buffer) {
@@ -993,25 +1163,22 @@ fn start_multicast_discovery(
                         continue;
                     }
 
-                    let sender_ip = sender.ip().to_string();
-                    let app_handle = app.clone();
-                    std::thread::spawn(move || {
-                        let runtime = match tokio::runtime::Runtime::new() {
-                            Ok(runtime) => runtime,
-                            Err(_) => return,
-                        };
+                    let device = DeviceInfo {
+                        id: packet.id,
+                        name: packet.name,
+                        device_type: packet.device_type,
+                        ip: sender.ip().to_string(),
+                        port: packet.port,
+                        last_seen_at: unix_time_millis(),
+                    };
+                    remember_discovered_device(&app, device);
 
-                        if let Some(device) = runtime.block_on(probe_device_with_timeout(
-                            &sender_ip,
-                            Duration::from_secs(2),
-                        )) {
-                            remember_discovered_device(&app_handle, device);
-                        }
-                    });
+                    if packet.announce {
+                        send_discovery_packets(&send_sockets, &response, &broadcast_targets);
+                    }
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    send_discovery_packets(&send_sockets, &announcement, &broadcast_targets);
-                    std::thread::sleep(Duration::from_millis(700));
+                    std::thread::sleep(Duration::from_millis(80));
                 }
                 Err(_) => break,
             }
@@ -1030,6 +1197,22 @@ fn start_lan_probe_scan(app: tauri::AppHandle, local_interfaces: Vec<LanInterfac
     }
 
     std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(800));
+        let already_found = app
+            .state::<Mutex<SyncState>>()
+            .lock()
+            .map(|state| {
+                let now = unix_time_millis();
+                state.discovered_devices.iter().any(|device| {
+                    device.id != state.device_id
+                        && now.saturating_sub(device.last_seen_at) <= 10_000
+                })
+            })
+            .unwrap_or(false);
+        if already_found {
+            return;
+        }
+
         let runtime = match tokio::runtime::Runtime::new() {
             Ok(runtime) => runtime,
             Err(_) => return,
@@ -1063,98 +1246,126 @@ fn start_sync_discovery(
 ) -> Result<Vec<DeviceInfo>, String> {
     let current_device = get_device_info(app.clone())?;
     let local_interfaces = preferred_lan_interfaces();
-    let mut sync_state = state.lock().map_err(|e| e.to_string())?;
+    if local_interfaces.is_empty() {
+        return Err("未检测到可用的局域网连接，请先连接 WiFi".to_string());
+    }
+    {
+        let mut sync_state = state.lock().map_err(|e| e.to_string())?;
+        sync_state.device_id = current_device.id.clone();
+        let network_changed = sync_state
+            .discovered_devices
+            .iter()
+            .find(|device| device.id == current_device.id)
+            .map(|device| device.ip != current_device.ip)
+            .unwrap_or(false);
 
-    if let Some(mdns) = sync_state.mdns.take() {
-        let _ = mdns.shutdown();
+        if let Some(existing) = sync_state
+            .discovered_devices
+            .iter_mut()
+            .find(|device| device.id == current_device.id)
+        {
+            *existing = current_device.clone();
+        } else {
+            sync_state.discovered_devices.push(current_device.clone());
+        }
+
+        if sync_state.discovery_running && !network_changed {
+            let now = unix_time_millis();
+            let current_id = sync_state.device_id.clone();
+            sync_state.discovered_devices.retain(|device| {
+                device.id == current_id || now.saturating_sub(device.last_seen_at) <= 10_000
+            });
+            let devices = sync_state.discovered_devices.clone();
+            drop(sync_state);
+            start_lan_probe_scan(app, local_interfaces);
+            return Ok(devices);
+        }
+
+        if sync_state.discovery_running {
+            if let Some(stop) = sync_state.discovery_stop.take() {
+                stop.store(true, Ordering::Relaxed);
+            }
+            if let Some(mdns) = sync_state.mdns.take() {
+                let _ = mdns.shutdown();
+            }
+            sync_state.discovery_running = false;
+            std::thread::sleep(Duration::from_millis(120));
+        }
+
+        sync_state.discovery_running = true;
+        let stop = Arc::new(AtomicBool::new(false));
+        sync_state.discovery_stop = Some(stop.clone());
+        drop(sync_state);
+
+        start_multicast_discovery(
+            app.clone(),
+            current_device.clone(),
+            local_interfaces.clone(),
+            stop,
+        );
     }
 
-    let mdns = ServiceDaemon::new().map_err(|e| e.to_string())?;
+    // mDNS 是辅助发现路径；初始化失败时不能阻断 UDP 和网段探测。
+    if let Ok(mdns) = ServiceDaemon::new() {
+        let mut properties = std::collections::HashMap::new();
+        properties.insert("id".to_string(), current_device.id.clone());
+        properties.insert("name".to_string(), current_device.name.clone());
+        properties.insert("type".to_string(), current_device.device_type.clone());
 
-    let mut properties = std::collections::HashMap::new();
-    properties.insert("id".to_string(), current_device.id.clone());
-    properties.insert("name".to_string(), current_device.name.clone());
-    properties.insert("type".to_string(), current_device.device_type.clone());
+        let service = ServiceInfo::new(
+            SERVICE_TYPE,
+            &current_device.id,
+            &format!("{}.local.", current_device.id),
+            &current_device.ip,
+            SYNC_PORT,
+            Some(properties),
+        )
+        .map(|service| service.enable_addr_auto());
 
-    let my_service = ServiceInfo::new(
-        SERVICE_TYPE,
-        &current_device.id,
-        &format!("{}.local.", current_device.id),
-        &current_device.ip,
-        SYNC_PORT,
-        Some(properties),
-    )
-    .map_err(|e| e.to_string())?
-    .enable_addr_auto();
+        if let Ok(service) = service {
+            if mdns.register(service).is_ok() {
+                if let Ok(receiver) = mdns.browse(SERVICE_TYPE) {
+                    let handle = app.clone();
+                    std::thread::spawn(move || {
+                        let runtime = tokio::runtime::Runtime::new().ok();
 
-    mdns.register(my_service).map_err(|e| e.to_string())?;
+                        while let Ok(event) = receiver.recv() {
+                            if let ServiceEvent::ServiceResolved(info) = event {
+                                let props = info.get_properties();
+                                let id = prop_value(props, "id").unwrap_or_default();
+                                let ip = choose_lan_ipv4(
+                                    info.get_addresses()
+                                        .iter()
+                                        .map(|address| address.to_string()),
+                                );
+                                let Some(ip) = ip else {
+                                    continue;
+                                };
+                                let Some(runtime) = runtime.as_ref() else {
+                                    continue;
+                                };
+                                let Some(mut device) = runtime.block_on(probe_device(&ip)) else {
+                                    continue;
+                                };
+                                if !id.is_empty() && id != device.id {
+                                    continue;
+                                }
+                                device.last_seen_at = unix_time_millis();
+                                remember_discovered_device(&handle, device);
+                            }
+                        }
+                    });
 
-    let receiver = mdns.browse(SERVICE_TYPE).map_err(|e| e.to_string())?;
-
-    sync_state.device_id = current_device.id.clone();
-    sync_state.discovered_devices = vec![current_device.clone()];
-    sync_state.mdns = Some(mdns);
-
-    let handle = app.clone();
-    std::thread::spawn(move || {
-        let runtime = tokio::runtime::Runtime::new().ok();
-
-        while let Ok(event) = receiver.recv() {
-            if let ServiceEvent::ServiceResolved(info) = event {
-                let props = info.get_properties();
-                let id = prop_value(props, "id").unwrap_or_default();
-                let name =
-                    prop_value(props, "name").unwrap_or_else(|| info.get_fullname().to_string());
-                let device_type =
-                    prop_value(props, "type").unwrap_or_else(|| "Unknown".to_string());
-                let ip = choose_lan_ipv4(
-                    info.get_addresses()
-                        .iter()
-                        .map(|address| address.to_string()),
-                );
-
-                let Some(ip) = ip else {
-                    continue;
-                };
-
-                let Some(runtime) = runtime.as_ref() else {
-                    continue;
-                };
-                let Some(probed_device) = runtime.block_on(probe_device(&ip)) else {
-                    continue;
-                };
-
-                if !id.is_empty() && id != probed_device.id {
-                    continue;
+                    if let Ok(mut sync_state) = state.lock() {
+                        sync_state.mdns = Some(mdns);
+                    }
                 }
-
-                let device = DeviceInfo {
-                    id: probed_device.id.clone(),
-                    name: if probed_device.name.is_empty() {
-                        name
-                    } else {
-                        probed_device.name
-                    },
-                    device_type: if probed_device.device_type.is_empty() {
-                        device_type
-                    } else {
-                        probed_device.device_type
-                    },
-                    ip: probed_device.ip,
-                };
-
-                remember_discovered_device(&handle, device);
             }
         }
-    });
+    }
 
-    start_multicast_discovery(
-        app.clone(),
-        current_device.clone(),
-        local_interfaces.clone(),
-    );
-    start_lan_probe_scan(app, local_interfaces);
-
+    start_lan_probe_scan(app.clone(), local_interfaces);
+    let sync_state = state.lock().map_err(|e| e.to_string())?;
     Ok(sync_state.discovered_devices.clone())
 }
 
@@ -1164,6 +1375,10 @@ fn stop_sync_discovery(state: tauri::State<'_, Mutex<SyncState>>) -> Result<(), 
     if let Some(mdns) = sync_state.mdns.take() {
         let _ = mdns.shutdown();
     }
+    if let Some(stop) = sync_state.discovery_stop.take() {
+        stop.store(true, Ordering::Relaxed);
+    }
+    sync_state.discovery_running = false;
     sync_state.discovered_devices.clear();
     Ok(())
 }
@@ -1175,6 +1390,7 @@ fn get_discovered_devices(
     let sync_state = state.lock().map_err(|e| e.to_string())?;
     let local_ips = local_lan_ipv4_addresses();
     let mut seen = HashSet::new();
+    let now = unix_time_millis();
     let devices = sync_state
         .discovered_devices
         .iter()
@@ -1184,6 +1400,10 @@ fn get_discovered_devices(
                 return true;
             }
 
+            if now.saturating_sub(device.last_seen_at) > 10_000 {
+                return false;
+            }
+
             matches!(
                 ip_from_string(&device.ip),
                 Some(IpAddr::V4(ip)) if is_usable_lan_ipv4(ip) && !local_ips.contains(&device.ip)
@@ -1191,6 +1411,58 @@ fn get_discovered_devices(
         })
         .cloned()
         .collect();
+
+    Ok(devices)
+}
+
+#[tauri::command]
+fn get_sync_server_status(state: tauri::State<'_, Mutex<SyncState>>) -> Result<(), String> {
+    let state = state.lock().map_err(|e| e.to_string())?;
+    if state.server_ready {
+        Ok(())
+    } else {
+        Err(state
+            .server_error
+            .clone()
+            .unwrap_or_else(|| "同步服务正在启动，请稍后重试".to_string()))
+    }
+}
+
+#[tauri::command]
+async fn probe_known_devices(
+    app: tauri::AppHandle,
+    target_ips: Vec<String>,
+) -> Result<Vec<DeviceInfo>, String> {
+    let local_ips = local_lan_ipv4_addresses();
+    let mut seen = HashSet::new();
+    let targets = target_ips
+        .into_iter()
+        .filter(|ip| seen.insert(ip.clone()))
+        .filter(|ip| !local_ips.contains(ip))
+        .filter(|ip| {
+            matches!(
+                ip_from_string(ip),
+                Some(IpAddr::V4(value)) if is_usable_lan_ipv4(value)
+            )
+        })
+        .take(16)
+        .collect::<Vec<_>>();
+
+    let mut tasks = tokio::task::JoinSet::new();
+    for target in targets {
+        tasks.spawn(
+            async move { probe_device_with_timeout(&target, Duration::from_millis(550)).await },
+        );
+    }
+
+    let mut devices = Vec::new();
+    while let Some(result) = tasks.join_next().await {
+        if let Ok(Some(mut device)) = result {
+            device.last_seen_at = unix_time_millis();
+            remember_discovered_device(&app, device.clone());
+            devices.push(device);
+        }
+    }
 
     Ok(devices)
 }
@@ -1209,15 +1481,18 @@ async fn handle_sync_request(
     headers: HeaderMap,
     Json(remote_payload): Json<SyncPayload>,
 ) -> Result<Json<SyncPayload>, (StatusCode, String)> {
+    let _guard = DATA_FILE_LOCK
+        .lock()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let local_payload =
-        read_sync_payload(app.clone()).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        read_sync_payload_unlocked(&app).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let merged_payload = merge_sync_payloads(local_payload.clone(), remote_payload);
     let summary = summarize_sync_changes(&local_payload, &merged_payload);
 
     if total_sync_changes(&summary) > 0 {
-        backup_data_file(&app, "before-sync")
+        backup_data_file_unlocked(&app, "before-sync")
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-        write_sync_payload(app.clone(), &merged_payload)
+        write_sync_payload_unlocked(&app, &merged_payload)
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     }
 
@@ -1383,12 +1658,15 @@ async fn request_sync_from_device(
         return Err(format!("对方返回错误：{}", err_text));
     }
 
-    let merged_payload: SyncPayload = response.json().await.map_err(|e| e.to_string())?;
-    let summary = summarize_sync_changes(&local_data, &merged_payload);
+    let remote_merged_payload: SyncPayload = response.json().await.map_err(|e| e.to_string())?;
+    let _guard = DATA_FILE_LOCK.lock().map_err(|e| e.to_string())?;
+    let latest_local_payload = read_sync_payload_unlocked(&app)?;
+    let merged_payload = merge_sync_payloads(latest_local_payload.clone(), remote_merged_payload);
+    let summary = summarize_sync_changes(&latest_local_payload, &merged_payload);
 
     if total_sync_changes(&summary) > 0 {
-        backup_data_file(&app, "before-sync")?;
-        write_sync_payload(app, &merged_payload)?;
+        backup_data_file_unlocked(&app, "before-sync")?;
+        write_sync_payload_unlocked(&app, &merged_payload)?;
     }
 
     Ok(build_sync_result("同步完成，已与对方完成双向合并", summary))
@@ -1396,6 +1674,11 @@ async fn request_sync_from_device(
 
 fn read_sync_payload(app: tauri::AppHandle) -> Result<SyncPayload, String> {
     let content = read_data_file(app)?;
+    serde_json::from_str(&content).map_err(|e| e.to_string())
+}
+
+fn read_sync_payload_unlocked(app: &tauri::AppHandle) -> Result<SyncPayload, String> {
+    let content = load_local_file_content_unlocked(app)?;
     serde_json::from_str(&content).map_err(|e| e.to_string())
 }
 
@@ -1540,6 +1823,12 @@ fn write_sync_payload(app: tauri::AppHandle, payload: &SyncPayload) -> Result<()
     write_data_file(app, content)
 }
 
+fn remote_wins_tie<T: Serialize>(local: &T, remote: &T) -> bool {
+    let local_value = serde_json::to_string(local).unwrap_or_default();
+    let remote_value = serde_json::to_string(remote).unwrap_or_default();
+    remote_value > local_value
+}
+
 fn merge_sync_payloads(mut local_data: SyncPayload, remote_payload: SyncPayload) -> SyncPayload {
     for remote_acc in remote_payload.accounts {
         if let Some(local_acc) = local_data
@@ -1547,7 +1836,10 @@ fn merge_sync_payloads(mut local_data: SyncPayload, remote_payload: SyncPayload)
             .iter_mut()
             .find(|a| a.id == remote_acc.id)
         {
-            if remote_acc.updated_at > local_acc.updated_at {
+            if remote_acc.updated_at > local_acc.updated_at
+                || (remote_acc.updated_at == local_acc.updated_at
+                    && remote_wins_tie(local_acc, &remote_acc))
+            {
                 *local_acc = remote_acc;
             }
         } else {
@@ -1557,7 +1849,10 @@ fn merge_sync_payloads(mut local_data: SyncPayload, remote_payload: SyncPayload)
 
     for remote_tag in remote_payload.tags {
         if let Some(local_tag) = local_data.tags.iter_mut().find(|t| t.id == remote_tag.id) {
-            if remote_tag.updated_at > local_tag.updated_at {
+            if remote_tag.updated_at > local_tag.updated_at
+                || (remote_tag.updated_at == local_tag.updated_at
+                    && remote_wins_tie(local_tag, &remote_tag))
+            {
                 *local_tag = remote_tag;
             }
         } else {
@@ -1567,7 +1862,10 @@ fn merge_sync_payloads(mut local_data: SyncPayload, remote_payload: SyncPayload)
 
     if let Some(remote_theme) = remote_payload.theme {
         match &local_data.theme {
-            Some(local_theme) if local_theme.updated_at >= remote_theme.updated_at => {}
+            Some(local_theme)
+                if local_theme.updated_at > remote_theme.updated_at
+                    || (local_theme.updated_at == remote_theme.updated_at
+                        && !remote_wins_tie(local_theme, &remote_theme)) => {}
             _ => local_data.theme = Some(remote_theme),
         }
     }

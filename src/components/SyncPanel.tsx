@@ -11,6 +11,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Smartphone,
+  Star,
   Wifi,
   X,
 } from 'lucide-react';
@@ -24,6 +25,7 @@ import {
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
 import { Input } from './ui/input';
+import { flushPendingDataWrites } from '../hooks/useAccounts';
 
 interface SyncPanelProps {
   open: boolean;
@@ -36,6 +38,26 @@ interface DeviceInfo {
   name: string;
   device_type: string;
   ip: string;
+  port: number;
+  last_seen_at: number;
+}
+
+interface SavedDevice {
+  id: string;
+  name: string;
+  alias?: string;
+  device_type: string;
+  ip: string;
+  port: number;
+  favorite: boolean;
+  lastSeenAt: number;
+  lastSyncedAt?: number;
+}
+
+interface ListedDevice extends DeviceInfo {
+  online: boolean;
+  favorite: boolean;
+  displayName: string;
 }
 
 interface SyncSummary {
@@ -79,6 +101,17 @@ const emptySummary = (): SyncSummary => ({
   deletedTags: 0,
   updatedTheme: 0,
 });
+
+const SAVED_DEVICES_KEY = 'vaultlink_sync_saved_devices';
+
+const loadSavedDevices = (): Record<string, SavedDevice> => {
+  try {
+    const value = localStorage.getItem(SAVED_DEVICES_KEY);
+    return value ? JSON.parse(value) : {};
+  } catch {
+    return {};
+  }
+};
 
 const isLanIpv4 = (ip: string) => {
   const parts = ip.split('.');
@@ -155,6 +188,9 @@ export const SyncPanel = ({ open, onClose, onSynced }: SyncPanelProps) => {
   const [isSavingName, setIsSavingName] = useState(false);
   const [manualIp, setManualIp] = useState('');
   const [syncFeedback, setSyncFeedback] = useState<SyncFeedback | null>(null);
+  const [savedDevices, setSavedDevices] = useState<Record<string, SavedDevice>>(loadSavedDevices);
+  const [editingPeerId, setEditingPeerId] = useState<string | null>(null);
+  const [peerAliasInput, setPeerAliasInput] = useState('');
 
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
@@ -168,6 +204,66 @@ export const SyncPanel = ({ open, onClose, onSynced }: SyncPanelProps) => {
       return true;
     });
   }, [devices, currentDevice?.id]);
+
+  const listedDevices = useMemo<ListedDevice[]>(() => {
+    const onlineIds = new Set(nearbyDevices.map((device) => device.id));
+    const online = nearbyDevices.map((device) => {
+      const saved = savedDevices[device.id];
+      return {
+        ...device,
+        online: true,
+        favorite: saved?.favorite ?? false,
+        displayName: saved?.alias?.trim() || device.name,
+      };
+    });
+    const offlineFavorites = Object.values(savedDevices)
+      .filter((device) => device.favorite && !onlineIds.has(device.id))
+      .map((device) => ({
+        id: device.id,
+        name: device.name,
+        device_type: device.device_type,
+        ip: device.ip,
+        port: device.port,
+        last_seen_at: device.lastSeenAt,
+        online: false,
+        favorite: true,
+        displayName: device.alias?.trim() || device.name,
+      }));
+
+    return [...online, ...offlineFavorites].sort((left, right) => {
+      if (left.favorite !== right.favorite) return left.favorite ? -1 : 1;
+      if (left.online !== right.online) return left.online ? -1 : 1;
+      return left.displayName.localeCompare(right.displayName, 'zh-CN');
+    });
+  }, [nearbyDevices, savedDevices]);
+
+  const persistSavedDevices = (next: Record<string, SavedDevice>) => {
+    setSavedDevices(next);
+    localStorage.setItem(SAVED_DEVICES_KEY, JSON.stringify(next));
+  };
+
+  const rememberDevice = (device: DeviceInfo) => {
+    if (device.id === currentDevice?.id) return;
+    setSavedDevices((previous) => {
+      const existing = previous[device.id];
+      const next = {
+        ...previous,
+        [device.id]: {
+          id: device.id,
+          name: device.name,
+          alias: existing?.alias,
+          device_type: device.device_type,
+          ip: device.ip,
+          port: device.port,
+          favorite: existing?.favorite ?? false,
+          lastSeenAt: device.last_seen_at || Date.now(),
+          lastSyncedAt: existing?.lastSyncedAt,
+        },
+      };
+      localStorage.setItem(SAVED_DEVICES_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (!currentDevice || isEditingName) {
@@ -194,9 +290,11 @@ export const SyncPanel = ({ open, onClose, onSynced }: SyncPanelProps) => {
 
     let disposed = false;
     let interval: ReturnType<typeof setInterval> | undefined;
+    let scanTimer: ReturnType<typeof setTimeout> | undefined;
 
     const loadAndScan = async () => {
       try {
+        setIsScanning(true);
         setSyncMessage('正在搜索同一 WiFi 下的设备...');
 
         const device = await invoke<DeviceInfo>('get_device_info');
@@ -204,12 +302,24 @@ export const SyncPanel = ({ open, onClose, onSynced }: SyncPanelProps) => {
         setCurrentDevice(device);
         setDeviceNameInput(device.name);
 
-        const discovered = await invoke<DeviceInfo[]>('start_sync_discovery');
+        await invoke('get_sync_server_status');
+
+        const favoriteIps = Object.values(loadSavedDevices())
+          .filter((item) => item.favorite && item.ip)
+          .map((item) => item.ip);
+        const [discovered, knownDevices] = await Promise.all([
+          invoke<DeviceInfo[]>('start_sync_discovery'),
+          favoriteIps.length > 0
+            ? invoke<DeviceInfo[]>('probe_known_devices', { targetIps: favoriteIps })
+            : Promise.resolve([]),
+        ]);
         if (disposed) return;
 
-        setDevices(discovered);
-        setIsScanning(true);
+        const combined = [...discovered, ...knownDevices];
+        setDevices(Array.from(new Map(combined.map((item) => [item.id, item])).values()));
+        combined.filter((item) => item.id !== device.id).forEach(rememberDevice);
         setSyncMessage('已开始发现设备，附近设备会自动出现在这里。');
+        scanTimer = setTimeout(() => setIsScanning(false), 3500);
 
         interval = setInterval(async () => {
           try {
@@ -236,6 +346,9 @@ export const SyncPanel = ({ open, onClose, onSynced }: SyncPanelProps) => {
       if (interval) {
         clearInterval(interval);
       }
+      if (scanTimer) {
+        clearTimeout(scanTimer);
+      }
       setIsScanning(false);
       setDevices([]);
     };
@@ -247,10 +360,12 @@ export const SyncPanel = ({ open, onClose, onSynced }: SyncPanelProps) => {
     }
 
     let disposed = false;
-    let unlisten: UnlistenFn | undefined;
+    let unlistenNotice: UnlistenFn | undefined;
+    let unlistenDevice: UnlistenFn | undefined;
+    let unlistenDiscoveryError: UnlistenFn | undefined;
 
     const attachListener = async () => {
-      unlisten = await listen<SyncNoticePayload>('sync-notice', async (event) => {
+      const stopNotice = await listen<SyncNoticePayload>('sync-notice', (event) => {
         if (disposed) {
           return;
         }
@@ -266,28 +381,79 @@ export const SyncPanel = ({ open, onClose, onSynced }: SyncPanelProps) => {
           targetLabel,
           summary,
         });
-        await onSynced();
       });
+      if (disposed) {
+        void stopNotice();
+        return;
+      }
+      unlistenNotice = stopNotice;
+
+      const stopDevice = await listen<DeviceInfo>('sync-device-seen', (event) => {
+        if (disposed || event.payload.id === currentDevice?.id) {
+          return;
+        }
+        const device = event.payload;
+        setDevices((previous) => {
+          const next = previous.filter((item) => item.id !== device.id);
+          return [...next, device];
+        });
+        rememberDevice(device);
+        setIsScanning(false);
+        setSyncMessage(`已发现 ${device.name}`);
+      });
+      if (disposed) {
+        void stopDevice();
+      } else {
+        unlistenDevice = stopDevice;
+      }
+
+      const stopDiscoveryError = await listen<string>('sync-discovery-error', (event) => {
+        if (!disposed) {
+          setIsScanning(false);
+          setSyncMessage(`搜索失败：${event.payload}`);
+        }
+      });
+      if (disposed) {
+        void stopDiscoveryError();
+      } else {
+        unlistenDiscoveryError = stopDiscoveryError;
+      }
     };
 
     void attachListener();
 
     return () => {
       disposed = true;
-      if (unlisten) {
-        void unlisten();
+      if (unlistenNotice) {
+        void unlistenNotice();
+      }
+      if (unlistenDevice) {
+        void unlistenDevice();
+      }
+      if (unlistenDiscoveryError) {
+        void unlistenDiscoveryError();
       }
     };
-  }, [open, onSynced]);
+  }, [open, currentDevice?.id]);
 
   const handleRescan = async () => {
     setIsScanning(true);
     setSyncMessage('正在重新搜索局域网设备...');
     try {
-      await invoke('stop_sync_discovery');
-      const discovered = await invoke<DeviceInfo[]>('start_sync_discovery');
-      setDevices(discovered);
-      setSyncMessage('已重新开始搜索。');
+      const favoriteIps = Object.values(savedDevices)
+        .filter((item) => item.favorite && item.ip)
+        .map((item) => item.ip);
+      const [discovered, knownDevices] = await Promise.all([
+        invoke<DeviceInfo[]>('start_sync_discovery'),
+        favoriteIps.length > 0
+          ? invoke<DeviceInfo[]>('probe_known_devices', { targetIps: favoriteIps })
+          : Promise.resolve([]),
+      ]);
+      const combined = [...discovered, ...knownDevices];
+      setDevices(Array.from(new Map(combined.map((item) => [item.id, item])).values()));
+      combined.forEach(rememberDevice);
+      setSyncMessage(combined.length > 1 ? '已更新附近设备。' : '正在继续搜索附近设备...');
+      setTimeout(() => setIsScanning(false), 2500);
     } catch (err) {
       setSyncMessage(`重新搜索失败：${String(err)}`);
       setIsScanning(false);
@@ -327,6 +493,7 @@ export const SyncPanel = ({ open, onClose, onSynced }: SyncPanelProps) => {
     });
 
     try {
+      await flushPendingDataWrites();
       const result = await invoke<SyncOperationResult>('request_sync_from_device', { targetIp });
       await onSynced();
       const summary = result.summary ?? emptySummary();
@@ -339,6 +506,13 @@ export const SyncPanel = ({ open, onClose, onSynced }: SyncPanelProps) => {
         targetLabel,
         summary,
       });
+      const matchedDevice = Object.values(savedDevices).find((device) => device.ip === targetIp);
+      if (matchedDevice) {
+        persistSavedDevices({
+          ...savedDevices,
+          [matchedDevice.id]: { ...matchedDevice, lastSyncedAt: Date.now() },
+        });
+      }
     } catch (err) {
       const message = String(err);
       setSyncMessage(`同步失败：${message}`);
@@ -354,7 +528,52 @@ export const SyncPanel = ({ open, onClose, onSynced }: SyncPanelProps) => {
   };
 
   const handleDeviceSyncClick = async (device: DeviceInfo) => {
-    await handleSync(device.ip, device.name);
+    const saved = savedDevices[device.id];
+    await handleSync(device.ip, saved?.alias?.trim() || device.name);
+  };
+
+  const toggleFavorite = (device: ListedDevice) => {
+    const existing = savedDevices[device.id];
+    persistSavedDevices({
+      ...savedDevices,
+      [device.id]: {
+        id: device.id,
+        name: device.name,
+        alias: existing?.alias,
+        device_type: device.device_type,
+        ip: device.ip,
+        port: device.port,
+        favorite: !device.favorite,
+        lastSeenAt: device.last_seen_at || existing?.lastSeenAt || Date.now(),
+        lastSyncedAt: existing?.lastSyncedAt,
+      },
+    });
+  };
+
+  const startEditingPeer = (device: ListedDevice) => {
+    setEditingPeerId(device.id);
+    setPeerAliasInput(savedDevices[device.id]?.alias || device.name);
+  };
+
+  const savePeerAlias = (device: ListedDevice) => {
+    const alias = peerAliasInput.trim();
+    const existing = savedDevices[device.id];
+    persistSavedDevices({
+      ...savedDevices,
+      [device.id]: {
+        id: device.id,
+        name: device.name,
+        alias: alias && alias !== device.name ? alias : undefined,
+        device_type: device.device_type,
+        ip: device.ip,
+        port: device.port,
+        favorite: existing?.favorite ?? false,
+        lastSeenAt: device.last_seen_at || existing?.lastSeenAt || Date.now(),
+        lastSyncedAt: existing?.lastSyncedAt,
+      },
+    });
+    setEditingPeerId(null);
+    setPeerAliasInput('');
   };
 
   const handleManualSync = async () => {
@@ -420,7 +639,7 @@ export const SyncPanel = ({ open, onClose, onSynced }: SyncPanelProps) => {
                   </div>
                   <div className="theme-primary-text flex shrink-0 items-center gap-2 text-xs">
                     {isScanning && <Loader2 className="h-3 w-3 animate-spin" />}
-                    {isScanning ? '发现中' : '未搜索'}
+                    {isScanning ? '发现中' : '自动发现已开启'}
                   </div>
                 </div>
 
@@ -514,50 +733,90 @@ export const SyncPanel = ({ open, onClose, onSynced }: SyncPanelProps) => {
                   </div>
                 )}
 
-                <div className="grid min-w-0 gap-2 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3 sm:grid-cols-[1fr_auto]">
-                  <Input
-                    value={manualIp}
-                    onChange={(event) => setManualIp(event.target.value)}
-                    inputMode="decimal"
-                    placeholder="手动输入对方 IP，例如 192.168.1.7"
-                    className="min-w-0 bg-white"
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={isSyncing}
-                    onClick={handleManualSync}
-                    className="border-slate-200 bg-white"
-                  >
-                    {isSyncing ? '同步中' : '手动同步'}
-                  </Button>
-                </div>
-
                 <div className="min-w-0 space-y-3">
-                  {nearbyDevices.length > 0 ? (
-                    nearbyDevices.map((device) => (
+                  {listedDevices.length > 0 ? (
+                    listedDevices.map((device) => (
                       <div
                         key={device.id}
-                        className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-3"
+                        className={`min-w-0 rounded-xl border px-3 py-3 transition-colors ${
+                          device.online
+                            ? 'border-slate-200 bg-white hover:border-[var(--app-primary-border)]'
+                            : 'border-slate-200 bg-slate-50'
+                        }`}
                       >
-                        <div className="min-w-0 flex-1">
-                          <div className="flex min-w-0 items-center gap-2 font-medium text-slate-950">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+                            device.online ? 'theme-primary-soft-icon' : 'bg-slate-200 text-slate-500'
+                          }`}>
                             {deviceIcon(device.device_type)}
-                            <span className="min-w-0 truncate">{device.name}</span>
                           </div>
-                          <p className="mt-1 min-w-0 truncate text-xs text-slate-500">
-                            {device.device_type} · {device.ip}
-                          </p>
+                          <div className="min-w-0 flex-1">
+                            {editingPeerId === device.id ? (
+                              <div className="flex min-w-0 items-center gap-1">
+                                <Input
+                                  value={peerAliasInput}
+                                  onChange={(event) => setPeerAliasInput(event.target.value)}
+                                  onKeyDown={(event) => {
+                                    if (event.key === 'Enter') savePeerAlias(device);
+                                    if (event.key === 'Escape') setEditingPeerId(null);
+                                  }}
+                                  maxLength={32}
+                                  autoFocus
+                                  className="h-8 min-w-0 bg-white"
+                                />
+                                <Button size="icon" className="h-8 w-8" onClick={() => savePeerAlias(device)} title="保存备注名">
+                                  <Check className="h-4 w-4" />
+                                </Button>
+                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setEditingPeerId(null)} title="取消">
+                                  <X className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            ) : (
+                              <div className="flex min-w-0 items-center gap-2">
+                                <span className={`min-w-0 truncate font-medium ${device.online ? 'text-slate-950' : 'text-slate-500'}`}>
+                                  {device.displayName}
+                                </span>
+                                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${device.online ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                              </div>
+                            )}
+                            <p className="mt-1 min-w-0 truncate text-xs text-slate-500">
+                              {device.online ? `${device.device_type} · ${device.ip}` : '收藏设备 · 当前离线'}
+                            </p>
+                          </div>
+                          {editingPeerId !== device.id && (
+                            <div className="flex shrink-0 items-center gap-1">
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="ghost"
+                                className="h-8 w-8 text-slate-500"
+                                onClick={() => toggleFavorite(device)}
+                                title={device.favorite ? '取消收藏' : '收藏设备'}
+                              >
+                                <Star className={`h-4 w-4 ${device.favorite ? 'fill-amber-400 text-amber-500' : ''}`} />
+                              </Button>
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="ghost"
+                                className="h-8 w-8 text-slate-500"
+                                onClick={() => startEditingPeer(device)}
+                                title="设置备注名"
+                              >
+                                <Edit3 className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={isSyncing || !device.online}
+                                onClick={() => handleDeviceSyncClick(device)}
+                                className="ml-1 shrink-0 border-slate-200 bg-white"
+                              >
+                                {isSyncing && syncFeedback?.targetLabel === device.displayName ? '同步中' : device.online ? '同步' : '离线'}
+                              </Button>
+                            </div>
+                          )}
                         </div>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={isSyncing}
-                          onClick={() => handleDeviceSyncClick(device)}
-                          className="shrink-0 border-slate-200"
-                        >
-                          {isSyncing && syncFeedback?.targetLabel === device.name ? '同步中' : '同步'}
-                        </Button>
                       </div>
                     ))
                   ) : (
@@ -566,6 +825,28 @@ export const SyncPanel = ({ open, onClose, onSynced }: SyncPanelProps) => {
                     </p>
                   )}
                 </div>
+
+                <details className="group rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-2">
+                  <summary className="cursor-pointer select-none text-sm text-slate-600">手动输入 IP</summary>
+                  <div className="mt-3 grid min-w-0 gap-2 sm:grid-cols-[1fr_auto]">
+                    <Input
+                      value={manualIp}
+                      onChange={(event) => setManualIp(event.target.value)}
+                      inputMode="decimal"
+                      placeholder="例如 192.168.1.7"
+                      className="min-w-0 bg-white"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={isSyncing}
+                      onClick={handleManualSync}
+                      className="border-slate-200 bg-white"
+                    >
+                      {isSyncing ? '同步中' : '同步'}
+                    </Button>
+                  </div>
+                </details>
               </CardContent>
             </Card>
 
