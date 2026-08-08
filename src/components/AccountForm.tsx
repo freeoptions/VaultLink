@@ -158,7 +158,7 @@ export const AccountForm = ({
   };
 
   const getCardTitle = (item: AccountItemFormData, index: number) =>
-    item.tabName.trim() || item.nickname.trim() || getDefaultTabName(index);
+    item.tabName.trim() || getDefaultTabName(index);
 
   const getCardDetail = (item: AccountItemFormData) =>
     item.username.trim() || item.email.trim() || item.phone.trim() || '未填写账号信息';
@@ -427,7 +427,7 @@ export const AccountForm = ({
                     <Input
                       id="nickname"
                       name="nickname"
-                      placeholder="账号昵称或备注名"
+                      placeholder="该软件中的账号昵称"
                       value={activeItem?.nickname || ''}
                       onChange={(e) => updateActiveItem({ nickname: e.target.value })}
                       autoComplete="off"

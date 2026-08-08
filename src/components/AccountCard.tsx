@@ -36,8 +36,6 @@ const maskPassword = (password: string) => '•'.repeat(Math.max(6, Math.min(pas
 const getTabLabel = (item: Account, index: number, total: number) => {
   const explicitName = item.tabName?.trim();
   if (explicitName) return explicitName;
-  const nickname = item.nickname?.trim();
-  if (nickname) return nickname;
   if (total === 1 || index === 0) return '主账号';
   return `账号 ${index + 1}`;
 };
